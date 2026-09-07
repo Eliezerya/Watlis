@@ -2,4 +2,13 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <color name="watlis_background">#FF000000</color>
+    <color name="watlis_surface">#FF101412</color>
+    <color name="watlis_surface_high">#FF1B211D</color>
+    <color name="watlis_border">#FF303932</color>
+    <color name="watlis_text">#FFF3F6F1</color>
+    <color name="watlis_muted">#FFA6B0A8</color>
+    <color name="watlis_accent">#FFC7ED9A</color>
+    <color name="watlis_accent_dark">#FF17200E</color>
+    <color name="watlis_danger">#FFFFAAA6</color>
 </resources>

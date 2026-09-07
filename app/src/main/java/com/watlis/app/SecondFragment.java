@@ -9,11 +9,9 @@ import androidx.annotation.NonNull;
 import androidx.fragment.app.Fragment;
 import androidx.navigation.fragment.NavHostFragment;
 
-import com.watlis.app.databinding.FragmentSecondBinding;
 
 public class SecondFragment extends Fragment {
 
-    private FragmentSecondBinding binding;
 
     @Override
     public View onCreateView(
@@ -21,15 +19,14 @@ public class SecondFragment extends Fragment {
             Bundle savedInstanceState
     ) {
 
-        binding = FragmentSecondBinding.inflate(inflater, container, false);
-        return binding.getRoot();
+        return inflater.inflate(R.layout.fragment_second, container, false);
 
     }
 
     public void onViewCreated(@NonNull View view, Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
 
-        binding.buttonSecond.setOnClickListener(v ->
+        view.findViewById(R.id.button_second).setOnClickListener(v ->
                 NavHostFragment.findNavController(SecondFragment.this)
                         .navigate(R.id.action_SecondFragment_to_FirstFragment)
         );
@@ -38,7 +35,6 @@ public class SecondFragment extends Fragment {
     @Override
     public void onDestroyView() {
         super.onDestroyView();
-        binding = null;
     }
 
 }
