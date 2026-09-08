@@ -27,6 +27,7 @@ import com.google.android.material.textfield.TextInputLayout;
 import com.watlis.app.data.CharacterEntity;
 import com.watlis.app.data.GenreEntity;
 import com.watlis.app.data.MediaEntity;
+import com.watlis.app.data.MediaTypeEntity;
 import com.watlis.app.data.StoryMemoryEntity;
 import com.watlis.app.data.UserProgressEntity;
 
@@ -169,6 +170,9 @@ public class MainActivity extends AppCompatActivity {
                     break;
                 case "genres":
                     showGenres();
+                    break;
+                case "types":
+                    showMediaTypes();
                     break;
                 case "stats":
                     showStats();
@@ -326,9 +330,6 @@ public class MainActivity extends AppCompatActivity {
             drawer.closeDrawers();
             showHome();
         }), 0, 16);
-        View divider = new View(this);
-        divider.setBackgroundColor(BORDER);
-        menu.addView(divider, lp(-1, dp(1)));
         add(menu, action("Genres", v -> {
             drawer.closeDrawers();
             showGenres();
@@ -337,9 +338,10 @@ public class MainActivity extends AppCompatActivity {
             drawer.closeDrawers();
             showStats();
         }), 0, 16);
-        View divider2 = new View(this);
-        divider2.setBackgroundColor(BORDER);
-        menu.addView(divider2, lp(-1, dp(1)));
+        add(menu, action("Media types", v -> {
+            drawer.closeDrawers();
+            showMediaTypes();
+        }), 0, 16);
         add(menu, action("Export data", v -> {
             drawer.closeDrawers();
             exportData();
@@ -349,7 +351,7 @@ public class MainActivity extends AppCompatActivity {
             importData();
         }), 0, 24);
         add(menu, action("Close", v -> drawer.closeDrawers()), 0, 0);
-        int selected = screen.equals("genres") ? 4 : screen.equals("stats") ? 5 : favoritesOnly ? 2 : 1;
+        int selected = screen.equals("genres") ? 3 : screen.equals("stats") ? 4 : screen.equals("types") ? 5 : favoritesOnly ? 2 : 1;
         menu.getChildAt(selected).setBackground(outlined(SURFACE_HIGH, ACCENT, 10));
         return menu;
     }
@@ -414,7 +416,7 @@ public class MainActivity extends AppCompatActivity {
         content.addView(activeFilters);
         homeList = new LinearLayout(this);
         homeList.setOrientation(LinearLayout.VERTICAL);
-        homeList.setPadding(dp(20), 0, dp(20), dp(24));
+        homeList.setPadding(dp(20), dp(12), dp(20), dp(24));
         homeScroll = scroll(homeList);
         content.addView(homeScroll, lp(-1, 0, 1));
         search.addTextChangedListener(new android.text.TextWatcher() {
@@ -452,7 +454,7 @@ public class MainActivity extends AppCompatActivity {
         activeFilters.removeAllViews();
         com.google.android.material.chip.ChipGroup chips = new com.google.android.material.chip.ChipGroup(this);
         for (String type : new HashSet<>(typeFilters))
-            filterChip(chips, cap(type), () -> {
+            filterChip(chips, typeName(type), () -> {
                 typeFilters.remove(type);
                 loadHome();
             });
@@ -504,7 +506,9 @@ public class MainActivity extends AppCompatActivity {
         UserProgressEntity p = viewModel.repository.progress(m.id);
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(0, dp(16), 0, dp(12));
+        int accent = mediaAccent(m);
+        row.setPadding(dp(12), dp(14), dp(12), dp(12));
+        row.setBackground(outlined(tint(SURFACE, accent, .035f), tint(BORDER, accent, .18f), 16));
         LinearLayout upper = new LinearLayout(this);
         upper.setGravity(Gravity.TOP);
         View cover = coverView(m.coverImage, m.title, 50, 72, m.coverPositionX, m.coverPositionY);
@@ -515,10 +519,12 @@ public class MainActivity extends AppCompatActivity {
         identity.setOrientation(LinearLayout.VERTICAL);
         TextView name = label(m.title, 16, TEXT);
         name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        name.setMaxLines(3);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.END);
         name.setOnClickListener(v -> openDetail(m.id));
         name.setMinHeight(dp(48));
         identity.addView(name, lp(-1, -2));
-        add(identity, muted(cap(m.type) + " · " + (p.rating == null ? "Unrated" : p.rating + "/10") + (m.isFavorite ? " · ★" : "")), 0, 4);
+        add(identity, muted(typeName(m.type) + " · " + (p.rating == null ? "Unrated" : p.rating + "/10") + (m.isFavorite ? " · ★" : "")), 0, 4);
         com.google.android.material.chip.ChipGroup tags = new com.google.android.material.chip.ChipGroup(this);
         List<GenreEntity> genres = viewModel.repository.genresFor(m.id);
         for (int i = 0; i < Math.min(2, genres.size()); i++)
@@ -530,13 +536,12 @@ public class MainActivity extends AppCompatActivity {
         menu.setTextSize(22);
         menu.setContentDescription("Actions for " + m.title);
         upper.addView(menu, lp(dp(48), dp(48)));
+        margin(menu, 8, 0, 0, 0);
         row.addView(upper);
         add(row, muted(statusLabel(p.trackingStatus, m.type)), 8, 4);
         row.addView(progressControls(m, p), lp(-1, -2));
         list.addView(row, lp(-1, -2));
-        View divider = new View(this);
-        divider.setBackgroundColor(BORDER);
-        list.addView(divider, lp(-1, dp(1)));
+        margin(row, 0, 0, 0, 12);
     }
 
     private TextView progressButton(String s) {
@@ -576,7 +581,37 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private String unit(MediaEntity m) {
-        return m.type.equals("anime") ? "Episode" : "Chapter";
+        return usesEpisodes(m.type) ? "Episode" : "Chapter";
+    }
+
+    private String typeName(String key) {
+        MediaTypeEntity type = viewModel.repository.mediaType(key);
+        return type == null ? cap(key) : type.name;
+    }
+
+    private boolean usesEpisodes(String key) {
+        MediaTypeEntity type = viewModel.repository.mediaType(key);
+        return type == null ? "anime".equals(key) : type.usesEpisodes;
+    }
+
+    private String[] typeKeys() {
+        List<MediaTypeEntity> types = viewModel.repository.mediaTypes();
+        String[] keys = new String[types.size()];
+        for (int i = 0; i < keys.length; i++) keys[i] = types.get(i).key;
+        return keys;
+    }
+
+    private int tint(int base, int accent, float amount) {
+        return androidx.core.graphics.ColorUtils.blendARGB(base, accent, amount);
+    }
+
+    private int mediaAccent(MediaEntity media) {
+        List<GenreEntity> genres = viewModel.repository.genresFor(media.id);
+        int accent = genres.isEmpty() ? ACCENT : color(genres.get(0).color);
+        // Keep even very dark genre colors legible against the dark surfaces.
+        while (androidx.core.graphics.ColorUtils.calculateContrast(accent, SURFACE_HIGH) < 4.5)
+            accent = tint(accent, Color.WHITE, .15f);
+        return accent;
     }
 
     private String formatProgress(MediaEntity m, UserProgressEntity p) {
@@ -651,7 +686,7 @@ public class MainActivity extends AppCompatActivity {
             private View render(int position, View convert, ViewGroup parent, boolean dropdown) {
                 TextView v = (TextView) (dropdown ? super.getDropDownView(position, convert, parent) : super.getView(position, convert, parent));
                 String raw = choices[position];
-                v.setText(raw.equals("reading") || raw.equals("plan_to_read") ? statusLabel(raw, editorType == null ? null : editorType.getSelectedItem().toString()) : cap(raw));
+                v.setText(raw.equals("reading") || raw.equals("plan_to_read") ? statusLabel(raw, editorType == null ? null : editorType.getSelectedItem().toString()) : typeName(raw));
                 v.setTextColor(TEXT);
                 v.setTextSize(16);
                 v.setMinHeight(dp(48));
@@ -695,7 +730,9 @@ public class MainActivity extends AppCompatActivity {
         content.addView(scroll(editorForm), lp(-1, 0, 1));
         editorTitle = field(editorForm, "Title", draft == null ? (m == null ? "" : m.title) : draft.getString("title"), false);
         add(editorForm, muted("Media type"), 0, 4);
-        editorType = spinner(editorForm, new String[]{"manga", "manhwa", "manhua", "anime"}, draft == null ? (m == null ? "manga" : m.type) : draft.getString("type"));
+        editorType = spinner(editorForm, typeKeys(), draft == null ? (m == null ? "manga" : m.type) : draft.getString("type"));
+        editorType.setContentDescription("Media type");
+        add(editorForm, action("+ New media type", v -> showMediaTypeDialog(null)), 0, 12);
         add(editorForm, muted("Release status"), 0, 4);
         editorRelease = spinner(editorForm, new String[]{"ongoing", "completed"}, draft == null ? (m == null ? "ongoing" : m.releaseStatus) : draft.getString("release"));
         editorGenres = new HashSet<>(m == null ? new ArrayList<>() : ids(viewModel.repository.genresFor(m.id)));
@@ -738,7 +775,7 @@ public class MainActivity extends AppCompatActivity {
             }
 
             public void onItemSelected(android.widget.AdapterView<?> parent, View v, int position, long id) {
-                ((TextInputLayout) editorProgress.getParent().getParent()).setHint(position == 3 ? "Current episode" : "Current chapter");
+                ((TextInputLayout) editorProgress.getParent().getParent()).setHint(usesEpisodes(parent.getItemAtPosition(position).toString()) ? "Current episode" : "Current chapter");
                 ((ArrayAdapter<?>) editorTracking.getAdapter()).notifyDataSetChanged();
             }
         });
@@ -798,6 +835,14 @@ public class MainActivity extends AppCompatActivity {
         page.setPadding(dp(20), dp(16), dp(20), dp(24));
         content.addView(scroll(page), lp(-1, 0, 1));
         LinearLayout header = new LinearLayout(this);
+        int accent = mediaAccent(m);
+        header.setPadding(dp(16), dp(20), dp(16), dp(20));
+        android.graphics.drawable.GradientDrawable hero = new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                new int[]{tint(SURFACE, accent, .10f), SURFACE});
+        hero.setCornerRadius(dp(20));
+        hero.setStroke(dp(1), tint(BORDER, accent, .15f));
+        header.setBackground(hero);
         View detailCover = coverView(m.coverImage, m.title, 80, 114, m.coverPositionX, m.coverPositionY);
         if (m.coverImage != null && !m.coverImage.isEmpty()) {
             detailCover.setContentDescription("Preview cover for " + m.title);
@@ -809,11 +854,13 @@ public class MainActivity extends AppCompatActivity {
         identity.setOrientation(LinearLayout.VERTICAL);
         TextView name = title(m.title);
         name.setTextSize(24);
+        name.setLineSpacing(dp(2), 1.05f);
         add(identity, name, 0, 8);
-        add(identity, muted(cap(m.type) + " · " + cap(m.releaseStatus)), 0, 8);
+        add(identity, muted(typeName(m.type) + " · " + cap(m.releaseStatus)), 0, 8);
         LinearLayout actions = new LinearLayout(this);
         TextView favorite = action(m.isFavorite ? "★" : "☆", v -> write(() -> viewModel.repository.favorite(id), () -> showDetail(id)));
         favorite.setContentDescription(m.isFavorite ? "Unfavorite" : "Favorite");
+        favorite.setTextColor(accent);
         actions.addView(favorite, lp(dp(48), dp(48)));
         TextView more = action("⋮", v -> mediaMenu(v, m));
         more.setContentDescription("Media actions");
@@ -824,8 +871,27 @@ public class MainActivity extends AppCompatActivity {
         margin(identity, 12, 0, 0, 0);
         add(page, header, 0, 12);
         com.google.android.material.chip.ChipGroup tags = new com.google.android.material.chip.ChipGroup(this);
-        for (GenreEntity g : viewModel.repository.genresFor(id))
-            tags.addView(chip(g.name, color(g.color)));
+        for (GenreEntity g : viewModel.repository.genresFor(id)) {
+            // Preserve the compact tag while giving its navigation action a 48dp target.
+            android.widget.FrameLayout target = new android.widget.FrameLayout(this);
+            target.setMinimumHeight(dp(48));
+            target.setMinimumWidth(dp(48));
+            TextView tag = chip(g.name, color(g.color));
+            tag.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            target.addView(tag, new android.widget.FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+            target.setContentDescription("Show titles in " + g.name);
+            target.setFocusable(true);
+            target.setForeground(new android.graphics.drawable.RippleDrawable(
+                    android.content.res.ColorStateList.valueOf(withAlpha(color(g.color), 40)), null, bg(Color.WHITE, 8)));
+            target.setOnClickListener(v -> {
+                clearFilters();
+                query = "";
+                genreFilters.add(g.id);
+                homeScrollY = 0;
+                showHome();
+            });
+            tags.addView(target);
+        }
         add(page, tags, 0, 24);
         add(page, sectionTitle("Your progress"), 0, 12);
         add(page, progressControls(m, p), 0, 8);
@@ -839,8 +905,8 @@ public class MainActivity extends AppCompatActivity {
         add(page, sectionTitle("Before you continue"), 0, 12);
         LinearLayout memory = new LinearLayout(this);
         memory.setOrientation(LinearLayout.VERTICAL);
-        memory.setPadding(dp(16), dp(8), dp(16), dp(8));
-        memory.setBackground(bg(SURFACE, 12));
+        memory.setPadding(dp(16), dp(4), dp(8), dp(4));
+        memory.setBackground(outlined(SURFACE, tint(BORDER, accent, .10f), 16));
         StoryMemoryEntity st = viewModel.repository.story(id);
         storyRow(memory, id, "Main character", st == null ? null : st.mainCharacterName, 0);
         storyRow(memory, id, "Story reminder", st == null ? null : st.storySummary, 1);
@@ -851,10 +917,18 @@ public class MainActivity extends AppCompatActivity {
         for (CharacterEntity c : viewModel.repository.characters(id)) addCharacterRow(page, c, id);
         add(page, action("+ Add character", v -> showCharacterDialog(id, null)), 0, 24);
         add(page, sectionTitle("Personal notes"), 0, 8);
-        if (p.notes != null && !p.notes.isEmpty()) add(page, label(p.notes, 14, TEXT), 0, 8);
-        add(page, action(p.notes == null || p.notes.isEmpty() ? "+ Add personal notes" : "Edit personal notes", v ->
+        if (p.notes != null && !p.notes.isEmpty()) {
+            TextView notes = label(p.notes, 16, TEXT);
+            notes.setLineSpacing(dp(3), 1.08f);
+            notes.setPadding(dp(16), dp(16), dp(16), dp(16));
+            notes.setBackground(bg(SURFACE, 14));
+            add(page, notes, 0, 4);
+        }
+        TextView notesAction = detailTextAction(p.notes == null || p.notes.isEmpty() ? "+ Add personal notes" : "Edit personal notes", accent, v ->
                 editTextDialog("Personal notes", p.notes, true, value ->
-                        write(() -> viewModel.repository.updateTracking(id, p.trackingStatus, p.rating, value), () -> showDetail(id)))), 0, 24);
+                        write(() -> viewModel.repository.updateTracking(id, p.trackingStatus, p.rating, value), () -> showDetail(id))));
+        page.addView(notesAction, lp(-2, -2));
+        margin(notesAction, 0, 0, 0, 24);
         add(page, action("Edit media", v -> showEditor(id)), 0, 24);
         TextView delete = action("Delete media", v -> confirmDelete(m));
         delete.setTextColor(DANGER);
@@ -864,6 +938,15 @@ public class MainActivity extends AppCompatActivity {
 
     private TextView sectionTitle(String s) {
         TextView v = label(s, 20, TEXT);
+        MediaEntity media = screen.equals("detail") ? viewModel.repository.media(detailId) : null;
+        if (media != null) {
+            v.setTextSize(18);
+            android.graphics.drawable.GradientDrawable mark = bg(mediaAccent(media), 2);
+            mark.setBounds(0, 0, dp(3), dp(16));
+            v.setCompoundDrawablesRelative(mark, null, null, null);
+            v.setCompoundDrawablePadding(dp(10));
+            androidx.core.view.ViewCompat.setAccessibilityHeading(v, true);
+        }
         v.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         return v;
     }
@@ -875,7 +958,8 @@ public class MainActivity extends AppCompatActivity {
     private void addCharacterRow(LinearLayout parent, CharacterEntity c, long id) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(0, dp(8), 0, dp(12));
+        row.setPadding(dp(16), dp(12), dp(12), dp(16));
+        row.setBackground(bg(SURFACE, 14));
         LinearLayout top = new LinearLayout(this);
         TextView name = label(c.name, 16, TEXT);
         name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -896,9 +980,12 @@ public class MainActivity extends AppCompatActivity {
         }), lp(dp(48), dp(48)));
         row.addView(top);
         if (c.role != null && !c.role.isEmpty()) add(row, muted(c.role), 0, 4);
-        if (c.description != null && !c.description.isEmpty())
-            add(row, label(c.description, 14, TEXT), 0, 0);
-        add(parent, row, 0, 4);
+        if (c.description != null && !c.description.isEmpty()) {
+            TextView description = label(c.description, 15, TEXT);
+            description.setLineSpacing(dp(3), 1.08f);
+            add(row, description, 4, 0);
+        }
+        add(parent, row, 0, 12);
     }
 
     private void showCharacterDialog(long id, CharacterEntity existing) {
@@ -971,8 +1058,8 @@ public class MainActivity extends AppCompatActivity {
             loadHome();
         });
         Runnable count = () -> apply.setText("Show " + filteredMedia(types, statuses, genres, favorites[0]).size() + " titles");
-        for (String t : new String[]{"manga", "manhwa", "manhua", "anime"})
-            selectionChip(typeGroup, cap(t), types.contains(t), selected -> {
+        for (String t : typeKeys())
+            selectionChip(typeGroup, typeName(t), types.contains(t), selected -> {
                 if (selected) types.add(t);
                 else types.remove(t);
                 count.run();
@@ -1099,6 +1186,110 @@ public class MainActivity extends AppCompatActivity {
         add(card, number, 0, 4);
         add(card, muted(sub), 0, 0);
         add(p, card, 0, 12);
+    }
+
+    private void showMediaTypes() {
+        screen = "types";
+        LinearLayout root = shell("Media types", "", false, true);
+        LinearLayout page = dialogForm();
+        content.addView(scroll(page), lp(-1, 0, 1));
+        add(page, muted("Organize your collection your way. Each type tracks chapters or episodes."), 0, 20);
+        java.util.Map<String, Integer> usage = new java.util.HashMap<>();
+        for (MediaEntity media : viewModel.repository.media())
+            usage.put(media.type, usage.getOrDefault(media.type, 0) + 1);
+        for (MediaTypeEntity type : viewModel.repository.mediaTypes()) {
+            LinearLayout row = new LinearLayout(this);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(14), dp(12), dp(12), dp(12));
+            row.setBackground(outlined(SURFACE, BORDER, 14));
+            LinearLayout info = new LinearLayout(this);
+            info.setOrientation(LinearLayout.VERTICAL);
+            TextView name = label(type.name, 17, TEXT);
+            name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            info.addView(name);
+            int count = usage.getOrDefault(type.key, 0);
+            add(info, muted((type.usesEpisodes ? "Episodes" : "Chapters") + " · " + count + (count == 1 ? " title" : " titles")), 6, 0);
+            info.setMinimumHeight(dp(48));
+            info.setOnClickListener(v -> showMediaTypeDialog(type));
+            info.setContentDescription("Edit media type " + type.name);
+            row.addView(info, lp(0, -2, 1));
+            TextView more = action("⋮", v -> {
+                PopupMenu menu = new PopupMenu(this, v);
+                menu.getMenu().add("Edit media type");
+                menu.getMenu().add("Delete media type");
+                menu.setOnMenuItemClickListener(item -> {
+                    if (item.getTitle().toString().equals("Edit media type")) showMediaTypeDialog(type);
+                    else confirmDeleteMediaType(type, count);
+                    return true;
+                });
+                menu.show();
+            });
+            more.setContentDescription("Actions for media type " + type.name);
+            row.addView(more, lp(dp(48), dp(48)));
+            margin(more, 10, 0, 0, 0);
+            add(page, row, 0, 12);
+        }
+        add(page, accentAction("+ New media type", v -> showMediaTypeDialog(null)), 8, 0);
+        install(root);
+    }
+
+    private void showMediaTypeDialog(MediaTypeEntity existing) {
+        LinearLayout form = dialogForm();
+        TextInputEditText name = field(form, "Media type name", existing == null ? "" : existing.name, false);
+        add(form, muted("Progress unit"), 0, 8);
+        Spinner unit = spinner(form, new String[]{"chapters", "episodes"}, existing != null && existing.usesEpisodes ? "episodes" : "chapters");
+        unit.setContentDescription("Progress unit");
+        add(form, muted("Changing the unit keeps progress numbers and reading history unchanged."), 0, 4);
+        androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setTitle(existing == null ? "New media type" : "Edit media type")
+                .setView(scroll(form)).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create();
+        dialog.setOnShowListener(d -> dialog.getButton(-1).setOnClickListener(v -> {
+            String value = text(name);
+            if (value.isEmpty()) { name.setError("Media type name is required"); return; }
+            for (MediaTypeEntity type : viewModel.repository.mediaTypes()) {
+                if (type.name.equalsIgnoreCase(value) && (existing == null || !type.key.equals(existing.key))) {
+                    name.setError("Media type names must be unique"); return;
+                }
+            }
+            MediaTypeEntity type = new MediaTypeEntity();
+            type.key = existing == null ? "" : existing.key;
+            type.name = value;
+            type.usesEpisodes = unit.getSelectedItemPosition() == 1;
+            dialog.getButton(-1).setEnabled(false);
+            write(() -> viewModel.repository.saveMediaType(type), () -> {
+                dialog.dismiss();
+                if (screen.equals("editor")) {
+                    formDraft = captureDraft();
+                    formDraft.putString("type", type.key);
+                    showEditor(editingId);
+                } else showMediaTypes();
+            });
+        }));
+        dialog.show();
+    }
+
+    private void confirmDeleteMediaType(MediaTypeEntity type, int count) {
+        List<MediaTypeEntity> replacements = viewModel.repository.mediaTypes();
+        replacements.removeIf(t -> t.key.equals(type.key));
+        if (replacements.isEmpty()) {
+            new MaterialAlertDialogBuilder(this).setTitle("Keep one media type")
+                    .setMessage("Add another type before deleting this one.").setPositiveButton("OK", null).show();
+            return;
+        }
+        LinearLayout form = dialogForm();
+        add(form, label(count == 0 ? "No titles use this type. Your collection will be kept."
+                : "Move " + count + " titles to another type. Progress, covers, genres, and notes will be kept.", 14, TEXT), 0, 12);
+        String[] keys = new String[replacements.size()];
+        for (int i = 0; i < keys.length; i++) keys[i] = replacements.get(i).key;
+        Spinner replacement = count == 0 ? null : spinner(form, keys, keys[0]);
+        new MaterialAlertDialogBuilder(this).setTitle("Delete “" + type.name + "”?").setView(scroll(form))
+                .setNegativeButton("Cancel", null).setPositiveButton(count == 0 ? "Delete" : "Move & delete", (d, w) -> {
+                    String key = replacement == null ? null : replacement.getSelectedItem().toString();
+                    write(() -> viewModel.repository.deleteMediaType(type.key, key), () -> {
+                        if (typeFilters.remove(type.key) && key != null) typeFilters.add(key);
+                        showMediaTypes();
+                    });
+                }).show();
     }
 
     private void showGenres() {
@@ -1442,12 +1633,12 @@ public class MainActivity extends AppCompatActivity {
             drawerPanel.setPadding(bars.left, bars.top, 0, bars.bottom);
             return androidx.core.view.WindowInsetsCompat.CONSUMED;
         });
-        drawerPanel.addView(bottomNav());
+        drawerPanel.addView(scroll(bottomNav()));
         drawer.addDrawerListener(new androidx.drawerlayout.widget.DrawerLayout.SimpleDrawerListener() {
             @Override
             public void onDrawerOpened(View view) {
                 drawerPanel.removeAllViews();
-                drawerPanel.addView(bottomNav());
+                drawerPanel.addView(scroll(bottomNav()));
             }
         });
         if (screen.equals("editor") || screen.equals("detail"))
@@ -1484,6 +1675,7 @@ public class MainActivity extends AppCompatActivity {
         if (screen.equals("detail")) showDetail(detailId);
         else if (screen.equals("stats")) showStats();
         else if (screen.equals("genres")) showGenres();
+        else if (screen.equals("types")) showMediaTypes();
         else if (screen.equals("home")) loadHome();
     }
 
@@ -1579,9 +1771,9 @@ public class MainActivity extends AppCompatActivity {
 
     private String statusLabel(String status, String type) {
         if ("reading".equals(status))
-            return type == null ? "Reading / watching" : "anime".equals(type) ? "Watching" : "Reading";
+            return type == null ? "Reading / watching" : usesEpisodes(type) ? "Watching" : "Reading";
         if ("plan_to_read".equals(status))
-            return type == null ? "Planned" : "anime".equals(type) ? "Plan to watch" : "Plan to read";
+            return type == null ? "Planned" : usesEpisodes(type) ? "Plan to watch" : "Plan to read";
         return cap(status);
     }
 
@@ -1624,8 +1816,10 @@ public class MainActivity extends AppCompatActivity {
         };
         minus.setOnClickListener(v -> update.accept(-1d));
         plus.setOnClickListener(v -> update.accept(1d));
-        plus.setBackground(bg(ACCENT, 10));
-        plus.setTextColor(Color.rgb(23, 32, 14));
+        int accent = mediaAccent(m);
+        minus.setTextColor(accent);
+        plus.setBackground(bg(accent, 10));
+        plus.setTextColor(readable(accent));
         group.addView(minus, lp(dp(48), dp(48)));
         group.addView(value, lp(0, -2, 1));
         group.addView(plus, lp(dp(48), dp(48)));
@@ -1838,31 +2032,85 @@ public class MainActivity extends AppCompatActivity {
 
     private void storyRow(LinearLayout parent, long id, String label, String value, int field) {
         boolean empty = value == null || value.isEmpty();
-        LinearLayout header = new LinearLayout(this);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView heading = label(empty ? "+ Add " + label.toLowerCase(Locale.ROOT) : label, 14, empty ? MUTED : TEXT);
-        heading.setMinHeight(dp(48));
-        heading.setOnClickListener(v -> editStory(id, label, value, field));
-        header.addView(heading, lp(0, -2, 1));
-        if (!empty)
-            header.addView(action("✎", v -> editStory(id, label, value, field)), lp(dp(48), dp(48)));
-        parent.addView(header);
+        MediaEntity media = viewModel.repository.media(id);
+        int accent = media == null ? ACCENT : mediaAccent(media);
+        if (parent.getChildCount() > 0) {
+            View divider = new View(this);
+            divider.setBackgroundColor(tint(SURFACE, BORDER, .65f));
+            parent.addView(divider, lp(-1, dp(1)));
+            margin(divider, 0, 0, 8, 0);
+        }
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.TOP);
+        row.setPadding(0, dp(16), 0, dp(16));
+        LinearLayout textColumn = new LinearLayout(this);
+        textColumn.setOrientation(LinearLayout.VERTICAL);
+        TextView heading = label(label, 11, MUTED);
+        heading.setAllCaps(true);
+        heading.setLetterSpacing(.09f);
+        heading.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        heading.setPadding(0, dp(4), 0, 0);
+        androidx.core.view.ViewCompat.setAccessibilityHeading(heading, true);
+        textColumn.addView(heading, lp(-1, -2));
+        row.addView(textColumn, lp(0, -2, 1));
         if (!empty) {
-            TextView body = label(value, 14, TEXT);
+            TextView body = label(value, field == 0 ? 18 : 16, TEXT);
+            if (field == 0) body.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            body.setLineSpacing(dp(3), 1.08f);
             body.setMaxLines(4);
             body.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            add(parent, body, 0, 8);
-            TextView expand = action("Show more", v -> {
+            body.setContentDescription(label + ": " + value);
+            add(textColumn, body, 8, 0);
+            TextView expand = detailTextAction("Show more", accent, v -> {
                 boolean collapsed = body.getMaxLines() == 4;
                 body.setMaxLines(collapsed ? Integer.MAX_VALUE : 4);
                 ((TextView) v).setText(collapsed ? "Show less" : "Show more");
+                v.setContentDescription((collapsed ? "Show less " : "Show more ") + label.toLowerCase(Locale.ROOT));
             });
-            add(parent, expand, 0, 8);
+            expand.setContentDescription("Show more " + label.toLowerCase(Locale.ROOT));
+            expand.setVisibility(View.GONE);
+            textColumn.addView(expand, lp(-2, -2));
+            // Evaluate after layout; short values never reserve an empty button row.
             body.post(() -> {
-                if (body.getLayout() != null)
-                    expand.setVisibility(body.getLayout().getEllipsisCount(body.getLayout().getLineCount() - 1) > 0 || body.getLineCount() > 4 ? View.VISIBLE : View.GONE);
+                android.text.Layout layout = body.getLayout();
+                if (layout != null && layout.getLineCount() > 0)
+                    expand.setVisibility(layout.getEllipsisCount(layout.getLineCount() - 1) > 0 || layout.getLineCount() > 4 ? View.VISIBLE : View.GONE);
             });
+            row.addView(detailEditIcon("Edit " + label.toLowerCase(Locale.ROOT), accent,
+                    v -> editStory(id, label, value, field)), lp(dp(48), dp(48)));
+        } else {
+            TextView addValue = detailTextAction("+ Add " + label.toLowerCase(Locale.ROOT), accent,
+                    v -> editStory(id, label, value, field));
+            textColumn.addView(addValue, lp(-2, -2));
         }
+        parent.addView(row, lp(-1, -2));
+    }
+
+    private TextView detailTextAction(String text, int accent, View.OnClickListener click) {
+        TextView view = label(text, 13, accent);
+        view.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        view.setMinHeight(dp(48));
+        view.setMinWidth(dp(48));
+        view.setPadding(0, dp(6), dp(12), dp(6));
+        view.setBackground(new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(withAlpha(accent, 35)), null, bg(Color.WHITE, 8)));
+        view.setOnClickListener(click);
+        return view;
+    }
+
+    private android.widget.ImageButton detailEditIcon(String description, int accent, View.OnClickListener click) {
+        android.widget.ImageButton button = new androidx.appcompat.widget.AppCompatImageButton(this);
+        button.setImageResource(R.drawable.ic_edit);
+        button.setImageTintList(android.content.res.ColorStateList.valueOf(accent));
+        android.graphics.drawable.Drawable surface = new android.graphics.drawable.InsetDrawable(
+                bg(tint(SURFACE, accent, .065f), 10), dp(8));
+        button.setBackground(new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(withAlpha(accent, 45)), surface,
+                new android.graphics.drawable.InsetDrawable(bg(Color.WHITE, 10), dp(8))));
+        button.setPadding(dp(15), dp(15), dp(15), dp(15));
+        button.setContentDescription(description);
+        button.setOnClickListener(click);
+        return button;
     }
 
     private void editStory(long id, String label, String value, int field) {

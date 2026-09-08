@@ -9,6 +9,8 @@ import java.util.List;
 
 @Dao
 public interface StoryDao {
+    @Query("SELECT * FROM story_memory") List<StoryMemoryEntity> getAll();
+    @Query("SELECT * FROM characters ORDER BY id") List<CharacterEntity> allCharacters();
     @Query("SELECT * FROM story_memory WHERE mediaId = :mediaId LIMIT 1") StoryMemoryEntity get(long mediaId);
     @Insert(onConflict = OnConflictStrategy.REPLACE) void save(StoryMemoryEntity memory);
     @Query("SELECT * FROM characters WHERE mediaId = :mediaId ORDER BY id") List<CharacterEntity> characters(long mediaId);

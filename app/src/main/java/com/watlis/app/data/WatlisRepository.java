@@ -13,6 +13,7 @@ public class WatlisRepository {
     private static class Snapshot {
         List<MediaEntity> media = new ArrayList<>();
         List<GenreEntity> genres = new ArrayList<>();
+        List<MediaTypeEntity> types = new ArrayList<>();
         Map<Long, UserProgressEntity> progress = new HashMap<>();
         Map<Long, List<GenreEntity>> tags = new HashMap<>();
         Map<Long, StoryMemoryEntity> stories = new HashMap<>();
@@ -24,19 +25,73 @@ public class WatlisRepository {
     public void refresh() {
         Snapshot next = new Snapshot();
         db.runInTransaction(() -> {
+            ensureMediaTypes();
+            next.types = db.mediaTypeDao().getAll();
             next.media = db.mediaDao().getAll();
             next.genres = db.genreDao().getAll();
-            for (MediaEntity media : next.media) {
-                next.progress.put(media.id, db.progressDao().get(media.id));
-                next.tags.put(media.id, db.genreDao().forMedia(media.id));
-                next.stories.put(media.id, db.storyDao().get(media.id));
-                next.characters.put(media.id, db.storyDao().characters(media.id));
+            for (UserProgressEntity p : db.progressDao().getAll()) next.progress.put(p.mediaId, p);
+            for (StoryMemoryEntity s : db.storyDao().getAll()) next.stories.put(s.mediaId, s);
+            for (CharacterEntity c : db.storyDao().allCharacters())
+                next.characters.computeIfAbsent(c.mediaId, k -> new ArrayList<>()).add(c);
+            Map<Long, GenreEntity> byId = new HashMap<>();
+            for (GenreEntity g : next.genres) byId.put(g.id, g);
+            for (MediaGenreCrossRef link : db.genreDao().allLinks()) {
+                GenreEntity genre = byId.get(link.genreId);
+                if (genre != null) next.tags.computeIfAbsent(link.mediaId, k -> new ArrayList<>()).add(genre);
             }
+            for (List<GenreEntity> tags : next.tags.values())
+                tags.sort((a, b) -> String.CASE_INSENSITIVE_ORDER.compare(a.name, b.name));
         });
         snapshot = next;
     }
 
     public List<MediaEntity> media() { return new ArrayList<>(snapshot.media); }
+    public List<MediaTypeEntity> mediaTypes() { return new ArrayList<>(snapshot.types); }
+    public MediaTypeEntity mediaType(String key) {
+        for (MediaTypeEntity type : snapshot.types) if (type.key.equals(key)) return type;
+        return null;
+    }
+    private void ensureMediaTypes() {
+        if (!db.mediaTypeDao().getAll().isEmpty()) return;
+        for (String key : new String[]{"manga", "manhwa", "manhua", "anime"}) {
+            MediaTypeEntity type = new MediaTypeEntity();
+            type.key = key;
+            type.name = Character.toUpperCase(key.charAt(0)) + key.substring(1);
+            type.usesEpisodes = key.equals("anime");
+            db.mediaTypeDao().insert(type);
+        }
+    }
+    public void saveMediaType(MediaTypeEntity type) {
+        db.runInTransaction(() -> {
+            ensureMediaTypes();
+            type.name = type.name.trim();
+            if (type.name.isEmpty()) throw new IllegalArgumentException("Media type name is required");
+            MediaTypeEntity duplicate = db.mediaTypeDao().findByName(type.name);
+            if (duplicate != null && !duplicate.key.equals(type.key))
+                throw new IllegalArgumentException("Media type names must be unique");
+            if (type.key.isEmpty()) {
+                type.key = "custom_" + java.util.UUID.randomUUID();
+                db.mediaTypeDao().insert(type);
+            } else {
+                if (db.mediaTypeDao().get(type.key) == null) throw new IllegalArgumentException("Media type no longer exists");
+                db.mediaTypeDao().update(type);
+            }
+        });
+        refresh();
+    }
+    public void deleteMediaType(String key, String replacement) {
+        db.runInTransaction(() -> {
+            if (db.mediaTypeDao().get(key) == null) return;
+            if (db.mediaTypeDao().getAll().size() <= 1) throw new IllegalArgumentException("Keep at least one media type");
+            if (db.mediaTypeDao().usage(key) > 0) {
+                if (key.equals(replacement) || replacement == null || db.mediaTypeDao().get(replacement) == null)
+                    throw new IllegalArgumentException("Choose a replacement for existing titles");
+                db.mediaTypeDao().reassign(key, replacement, System.currentTimeMillis());
+            }
+            db.mediaTypeDao().delete(key);
+        });
+        refresh();
+    }
     public MediaEntity media(long id) {
         for (MediaEntity m : snapshot.media) if (m.id == id) return m;
         return null;
@@ -68,6 +123,8 @@ public class WatlisRepository {
         if (progress.rating != null && (progress.rating < 1 || progress.rating > 10))
             throw new IllegalArgumentException("Rating must be between 1 and 10");
         db.runInTransaction(() -> {
+            ensureMediaTypes();
+            if (db.mediaTypeDao().get(media.type) == null) throw new IllegalArgumentException("Choose an existing media type");
             UserProgressEntity previous = media.id == 0 ? null : db.progressDao().get(media.id);
             long now = System.currentTimeMillis();
             media.title = media.title.trim();
@@ -107,6 +164,7 @@ public class WatlisRepository {
         Snapshot next = new Snapshot();
         next.media = previous.media;
         next.genres = previous.genres;
+        next.types = previous.types;
         next.tags = previous.tags;
         next.stories = previous.stories;
         next.characters = previous.characters;
@@ -192,7 +250,14 @@ public class WatlisRepository {
     public String exportToJson() {
         try {
             org.json.JSONObject root = new org.json.JSONObject();
-            root.put("version", 1);
+            root.put("version", 2);
+            org.json.JSONArray typeArray = new org.json.JSONArray();
+            for (MediaTypeEntity type : snapshot.types) {
+                org.json.JSONObject value = new org.json.JSONObject();
+                value.put("key", type.key); value.put("name", type.name); value.put("usesEpisodes", type.usesEpisodes);
+                typeArray.put(value);
+            }
+            root.put("mediaTypes", typeArray);
             root.put("exportedAt", System.currentTimeMillis());
             org.json.JSONArray genresArr = new org.json.JSONArray();
             for (GenreEntity g : snapshot.genres) {
@@ -262,6 +327,17 @@ public class WatlisRepository {
                 sql.execSQL("DELETE FROM user_progress");
                 sql.execSQL("DELETE FROM media");
                 sql.execSQL("DELETE FROM genres");
+                sql.execSQL("DELETE FROM media_types");
+                org.json.JSONArray types = root.optJSONArray("mediaTypes");
+                if (types != null) for (int i = 0; i < types.length(); i++) {
+                    org.json.JSONObject value = types.getJSONObject(i);
+                    MediaTypeEntity type = new MediaTypeEntity();
+                    type.key = value.getString("key"); type.name = value.getString("name").trim();
+                    type.usesEpisodes = value.optBoolean("usesEpisodes", false);
+                    if (type.key.isEmpty() || type.name.isEmpty()) throw new IllegalArgumentException("Invalid media type in backup");
+                    db.mediaTypeDao().insert(type);
+                }
+                ensureMediaTypes();
                 org.json.JSONArray genres = root.getJSONArray("genres");
                 for (int i = 0; i < genres.length(); i++) {
                     org.json.JSONObject o = genres.getJSONObject(i);
@@ -274,6 +350,12 @@ public class WatlisRepository {
                     org.json.JSONObject o = media.getJSONObject(i);
                     MediaEntity m = new MediaEntity();
                     m.id = o.getLong("id"); m.title = o.getString("title"); m.type = o.optString("type", "manga");
+                    if (db.mediaTypeDao().get(m.type) == null) {
+                        MediaTypeEntity type = new MediaTypeEntity();
+                        type.key = m.type; type.name = m.type;
+                        if (type.key.isEmpty()) throw new IllegalArgumentException("Invalid media type in backup");
+                        db.mediaTypeDao().insert(type);
+                    }
                     m.coverImage = nullStr(o, "coverImage");
                     m.coverPositionX = (float) o.optDouble("coverPositionX", 0.5);
                     m.coverPositionY = (float) o.optDouble("coverPositionY", 0.5);

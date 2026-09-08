@@ -74,6 +74,68 @@ public class RepositoryInstrumentedTest {
         }
         assertEquals(12.5,repository.progress(id).currentProgress,0);
     }
+    @Test public void mediaTypeRenameAndReassignmentKeepTrackingAndRelations() {
+        MediaTypeEntity type=new MediaTypeEntity();type.name="Web novel";
+        repository.saveMediaType(type);
+        long id=media("Custom",8);
+        MediaEntity m=repository.media(id);m.type=type.key;
+        GenreEntity g=new GenreEntity();g.name="Adventure";g.id=repository.addGenre(g);
+        repository.saveMedia(m,repository.progress(id),Collections.singletonList(g.id));
+        long recency=repository.progress(id).lastUpdatedAt;
+        StoryMemoryEntity story=new StoryMemoryEntity();story.mediaId=id;story.storySummary="Remember this";
+        repository.saveStory(story);
+        type.name="Audio drama";type.usesEpisodes=true;repository.saveMediaType(type);
+        assertEquals(type.key,repository.media(id).type);
+        assertEquals("Audio drama",repository.mediaType(type.key).name);
+        assertTrue(repository.mediaType(type.key).usesEpisodes);
+        try {repository.deleteMediaType(type.key,null);fail("Must require replacement");}
+        catch(IllegalArgumentException expected) {}
+        assertNotNull(repository.mediaType(type.key));
+        repository.deleteMediaType(type.key,"anime");
+        assertNull(repository.mediaType(type.key));
+        assertEquals("anime",repository.media(id).type);
+        assertEquals(12.5,repository.progress(id).currentProgress,0);
+        assertEquals(recency,repository.progress(id).lastUpdatedAt);
+        assertEquals(g.id,repository.genresFor(id).get(0).id);
+        assertEquals("Remember this",repository.story(id).storySummary);
+    }
+    @Test public void mediaTypesRejectDuplicatesAndKeepOneType() {
+        MediaTypeEntity duplicate=new MediaTypeEntity();duplicate.name=" MANGA ";
+        try {repository.saveMediaType(duplicate);fail("Duplicate accepted");}
+        catch(IllegalArgumentException expected) {}
+        for(String key:new String[]{"anime","manhwa","manhua"})repository.deleteMediaType(key,null);
+        try {repository.deleteMediaType("manga",null);fail("Last type deleted");}
+        catch(IllegalArgumentException expected) {}
+        assertEquals(1,repository.mediaTypes().size());
+        MediaEntity invalid=new MediaEntity();invalid.title="Invalid";invalid.type="missing";
+        try {repository.saveMedia(invalid,new UserProgressEntity(),Collections.emptyList());fail("Unknown type accepted");}
+        catch(IllegalArgumentException expected) {}
+        assertEquals(0,repository.media().size());
+    }
+    @Test public void backupRoundTripKeepsTypesCoverPositionAndRollsBackInvalidData() throws Exception {
+        MediaTypeEntity type=new MediaTypeEntity();type.name="Web series";type.usesEpisodes=true;
+        repository.saveMediaType(type);
+        long id=media("Backup",9);MediaEntity m=repository.media(id);m.type=type.key;m.coverPositionY=.8f;
+        repository.saveMedia(m,repository.progress(id),Collections.emptyList());
+        long recency=repository.progress(id).lastUpdatedAt;
+        String backup=repository.exportToJson();
+        repository.deleteMedia(m);repository.deleteMediaType(type.key,null);
+        repository.importFromJson(backup);
+        assertEquals(type.key,repository.media(id).type);
+        assertTrue(repository.mediaType(type.key).usesEpisodes);
+        assertEquals(.8f,repository.media(id).coverPositionY,0);
+        assertEquals(recency,repository.progress(id).lastUpdatedAt);
+        org.json.JSONObject broken=new org.json.JSONObject(backup);broken.remove("media");
+        try {repository.importFromJson(broken.toString());fail("Invalid backup accepted");}
+        catch(IllegalArgumentException expected) {}
+        assertNotNull(db.mediaDao().getById(id));
+        assertNotNull(db.mediaTypeDao().get(type.key));
+        org.json.JSONObject legacy=new org.json.JSONObject(backup);legacy.put("version",1);legacy.remove("mediaTypes");
+        legacy.getJSONArray("media").getJSONObject(0).put("type","manga");
+        repository.importFromJson(legacy.toString());
+        assertEquals(4,repository.mediaTypes().size());
+        assertEquals("manga",repository.media(id).type);
+    }
     @Test public void coverPositionPersistsWithoutChangingProgressRecency() {
         long id=media("Cover",null);
         long updated=repository.progress(id).lastUpdatedAt;

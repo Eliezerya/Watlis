@@ -6,22 +6,33 @@ import androidx.room.Room;
 import androidx.room.RoomDatabase;
 
 @Database(entities = {MediaEntity.class, GenreEntity.class, MediaGenreCrossRef.class,
-        UserProgressEntity.class, StoryMemoryEntity.class, CharacterEntity.class}, version = 3, exportSchema = false)
+        UserProgressEntity.class, StoryMemoryEntity.class, CharacterEntity.class, MediaTypeEntity.class}, version = 4, exportSchema = false)
 public abstract class WatlisDatabase extends RoomDatabase {
     public abstract MediaDao mediaDao();
     public abstract ProgressDao progressDao();
     public abstract GenreDao genreDao();
     public abstract StoryDao storyDao();
+    public abstract MediaTypeDao mediaTypeDao();
 
     private static volatile WatlisDatabase INSTANCE;
     public static WatlisDatabase get(Context context) {
         if (INSTANCE == null) {
             synchronized (WatlisDatabase.class) {
-                if (INSTANCE == null) INSTANCE = Room.databaseBuilder(context.getApplicationContext(), WatlisDatabase.class, "watlis.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3).build();
+                if (INSTANCE == null) INSTANCE = Room.databaseBuilder(context.getApplicationContext(), WatlisDatabase.class, "watlis.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build();
             }
         }
         return INSTANCE;
     }
+
+    public static final androidx.room.migration.Migration MIGRATION_3_4 =
+            new androidx.room.migration.Migration(3, 4) {
+        @Override public void migrate(@androidx.annotation.NonNull androidx.sqlite.db.SupportSQLiteDatabase db) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS media_types (`key` TEXT NOT NULL PRIMARY KEY, name TEXT COLLATE NOCASE NOT NULL, usesEpisodes INTEGER NOT NULL)");
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_media_types_name ON media_types(name)");
+            db.execSQL("INSERT INTO media_types VALUES ('manga','Manga',0),('manhwa','Manhwa',0),('manhua','Manhua',0),('anime','Anime',1)");
+            db.execSQL("INSERT OR IGNORE INTO media_types SELECT DISTINCT type,type,0 FROM media WHERE type NOT IN (SELECT `key` FROM media_types)");
+        }
+    };
 
     public static final androidx.room.migration.Migration MIGRATION_2_3 =
             new androidx.room.migration.Migration(2, 3) {

@@ -79,7 +79,7 @@ public class CoverInstrumentedTest {
             try(ActivityScenario<MainActivity> scenario=ActivityScenario.launch(MainActivity.class)) {
                 waitForText("+ Add");
                 onView(withContentDescription("Search your titles")).perform(replaceText(m.title),closeSoftKeyboard());
-                onView(withText(m.title)).perform(click());
+                onView(allOf(withText(m.title),not(isAssignableFrom(android.widget.EditText.class)))).perform(click());
                 onView(withContentDescription("Preview cover for "+m.title)).perform(click());
                 waitForText("Pinch to zoom · Double-tap to fit");
                 onView(withContentDescription("Full cover image")).check(matches(isDisplayed()));
@@ -91,8 +91,8 @@ public class CoverInstrumentedTest {
                 onView(withContentDescription("Vertical cover position")).perform(setPosition(90));
                 onView(withText("Use position")).perform(scrollTo(),click());
                 scenario.recreate();
-                waitForText("Adjust cover position");
-                onView(withText("Position · 50% across · 90% down")).check(matches(isDisplayed()));
+                waitForText("Edit media");
+                onView(withText("Position · 50% across · 90% down")).perform(scrollTo()).check(matches(isDisplayed()));
                 onView(withText("Save changes")).perform(scrollTo(),click());
                 long until=System.currentTimeMillis()+10000;
                 while(db.mediaDao().getById(m.id).coverPositionY!=0.9f&&System.currentTimeMillis()<until)Thread.sleep(50);

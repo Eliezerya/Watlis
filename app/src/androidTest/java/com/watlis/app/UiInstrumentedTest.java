@@ -75,6 +75,49 @@ public class UiInstrumentedTest {
             MediaEntity created=find(title);if(created!=null)db().mediaDao().delete(created);
         }
     }
+    @Test public void detailReminderHierarchyCompactEditingAndExpansionWork() throws Exception {
+        String title="Watlis detail test "+UUID.randomUUID();
+        WatlisRepository repo=new WatlisRepository(db());
+        MediaEntity m=new MediaEntity();m.title=title;
+        repo.saveMedia(m,new UserProgressEntity(),Collections.emptyList());
+        StoryMemoryEntity story=new StoryMemoryEntity();story.mediaId=m.id;story.mainCharacterName="Test reader";
+        story.storySummary="First reminder line\nSecond reminder line\nThird reminder line\nFourth reminder line\nFifth reminder line\nFinal reminder line";
+        repo.saveStory(story);
+        try(ActivityScenario<MainActivity> scenario=ActivityScenario.launch(MainActivity.class)) {
+            waitHome();
+            onView(withContentDescription("Search your titles")).perform(replaceText(title),closeSoftKeyboard());
+            onView(withContentDescription("Cover for "+title)).perform(click());
+            onView(withContentDescription("Edit main character")).perform(scrollTo()).check((view,error) -> {
+                if(error!=null)throw error;
+                float density=view.getResources().getDisplayMetrics().density;
+                assertTrue(view instanceof android.widget.ImageButton);
+                assertTrue("Compact icon keeps a 48dp tap target",view.getWidth()>=48*density-1);
+                assertTrue("Pencil artwork stays compact",view.getWidth()-view.getPaddingLeft()-view.getPaddingRight()<=19*density);
+            }).perform(click());
+            onView(withHint("Main character")).perform(replaceText("Updated reader"),closeSoftKeyboard());
+            onView(withText("Save")).perform(click());
+            await(() -> "Updated reader".equals(db().storyDao().get(m.id).mainCharacterName));
+            onView(withText("Updated reader")).perform(scrollTo()).check((view,error) -> {
+                if(error!=null)throw error;
+                android.widget.TextView body=(android.widget.TextView)view;
+                android.view.ViewGroup column=(android.view.ViewGroup)body.getParent();
+                android.widget.TextView label=(android.widget.TextView)column.getChildAt(0);
+                assertTrue(body.getTextSize()>label.getTextSize());
+                assertNotEquals(body.getCurrentTextColor(),label.getCurrentTextColor());
+            });
+            onView(withContentDescription("Show more story reminder")).perform(scrollTo(),click());
+            onView(withText(story.storySummary)).check((view,error) -> {
+                if(error!=null)throw error;
+                assertEquals(Integer.MAX_VALUE,((android.widget.TextView)view).getMaxLines());
+            });
+            onView(withContentDescription("Show less story reminder")).perform(scrollTo(),click());
+            onView(withText(story.storySummary)).check((view,error) -> {
+                if(error!=null)throw error;
+                assertEquals(4,((android.widget.TextView)view).getMaxLines());
+            });
+            assertEquals(story.storySummary,db().storyDao().get(m.id).storySummary);
+        } finally {db().mediaDao().delete(m);}
+    }
     @Test public void invalidProgressKeepsDialogOpenAndDraftBackPrompts() throws Exception {
         String title="Watlis validation "+UUID.randomUUID();
         WatlisRepository repo=new WatlisRepository(db());
@@ -101,6 +144,40 @@ public class UiInstrumentedTest {
         } finally {db().mediaDao().delete(m);}
     }
 
+    @Test public void detailGenreOpensMatchingListAndClearsPreviousSearchAndFavorites() throws Exception {
+        String prefix="Genre navigation "+UUID.randomUUID();
+        WatlisRepository repo=new WatlisRepository(db());
+        GenreEntity genre=new GenreEntity();genre.name=prefix;genre.id=repo.addGenre(genre);
+        List<MediaEntity> fixtures=new ArrayList<>();
+        try {
+            for(int i=0;i<3;i++) {
+                MediaEntity m=new MediaEntity();m.title=prefix+" "+i;m.isFavorite=i==0;
+                repo.saveMedia(m,new UserProgressEntity(),i<2?Collections.singletonList(genre.id):Collections.emptyList());
+                fixtures.add(m);
+            }
+            try(ActivityScenario<MainActivity> scenario=ActivityScenario.launch(MainActivity.class)) {
+                waitHome();
+                onView(withContentDescription("Open navigation drawer")).perform(click());
+                onView(withText(startsWith("Favorites  ·"))).perform(scrollTo(),click());
+                onView(withContentDescription("Search your titles")).perform(replaceText(fixtures.get(0).title),closeSoftKeyboard());
+                onView(withContentDescription("Cover for "+fixtures.get(0).title)).perform(click());
+                onView(withContentDescription("Show titles in "+genre.name)).perform(scrollTo(),click());
+                onView(withText("My media")).check(matches(isDisplayed()));
+                onView(withContentDescription("Search your titles")).check(matches(withText("")));
+                onView(withText("Filter · 1")).check(matches(isDisplayed()));
+                onView(withText("2 titles")).check(matches(isDisplayed()));
+                onView(withContentDescription("Cover for "+fixtures.get(1).title)).perform(scrollTo()).check(matches(isDisplayed()));
+                onView(withContentDescription("Cover for "+fixtures.get(2).title)).check(doesNotExist());
+                scenario.recreate();
+                waitHome();
+                onView(withText("Filter · 1")).check(matches(isDisplayed()));
+                onView(withText("2 titles")).check(matches(isDisplayed()));
+            }
+        } finally {
+            for(MediaEntity m:fixtures)db().mediaDao().delete(m);
+            db().genreDao().delete(genre.id);
+        }
+    }
     @Test public void filtersCombineGroupsAndCancelDiscardsDraft() throws Exception {
         String prefix="Watlis filters "+UUID.randomUUID();
         WatlisRepository repo=new WatlisRepository(db());

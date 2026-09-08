@@ -10,6 +10,7 @@ import java.util.List;
 
 @Dao
 public interface GenreDao {
+    @Query("SELECT * FROM media_genres ORDER BY genreId") List<MediaGenreCrossRef> allLinks();
     @Query("SELECT * FROM genres ORDER BY name COLLATE NOCASE") List<GenreEntity> getAll();
     @Query("SELECT * FROM genres WHERE id = :id LIMIT 1") GenreEntity get(long id);
     @Query("SELECT * FROM genres WHERE LOWER(name) = LOWER(:name) LIMIT 1") GenreEntity findByName(String name);
