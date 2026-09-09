@@ -48,6 +48,9 @@ public class MainActivity extends AppCompatActivity {
     private String selectedImageUri;
     private String pendingPickedCover;
     private float editorCoverX = 0.5f, editorCoverY = 0.5f;
+    private float editorCoverZoom = 1f;
+    private boolean editorSaving;
+    private TextView editorSaveButton;
     private TextView editorPositionSummary;
     private long selectedGenreFilter = -1;
     private String selectedStatusFilter = "all", selectedTypeFilter = "all", selectedSort = "updated";
@@ -106,29 +109,26 @@ public class MainActivity extends AppCompatActivity {
         });
         importPicker = registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
             if (uri == null) return;
-            try {
-                java.io.InputStream is = getContentResolver().openInputStream(uri);
-                if (is == null) {
-                    toast("Could not read the selected file");
-                    return;
-                }
-                String json = new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-                is.close();
-                new MaterialAlertDialogBuilder(this)
+            new MaterialAlertDialogBuilder(this)
                         .setTitle("Import data?")
                         .setMessage("This will replace all your current data with the imported backup. This action cannot be undone.\n\nConsider exporting your current data first.")
                         .setNegativeButton("Cancel", null)
                         .setPositiveButton("Import", (d, w) ->
-                                write(() -> viewModel.repository.importFromJson(json), () -> {
+                                write(() -> {
+                                    try (java.io.InputStream input = getContentResolver().openInputStream(uri)) {
+                                        if (input == null) throw new IllegalArgumentException("Could not read the selected file");
+                                        String json = new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                                        viewModel.repository.importFromJson(json);
+                                    } catch (java.io.IOException error) {
+                                        throw new IllegalArgumentException("Could not read the selected file", error);
+                                    }
+                                }, () -> {
                                     toast("Data imported successfully");
                                     formDraft = null;
                                     formBaseline = null;
                                     clearFilters();
                                     showHome();
                                 })).show();
-            } catch (Exception e) {
-                toast("Could not read the selected file");
-            }
         });
         if (savedInstanceState != null) {
             query = savedInstanceState.getString("query", "");
@@ -510,26 +510,43 @@ public class MainActivity extends AppCompatActivity {
         row.setPadding(dp(12), dp(14), dp(12), dp(12));
         row.setBackground(outlined(tint(SURFACE, accent, .035f), tint(BORDER, accent, .18f), 16));
         LinearLayout upper = new LinearLayout(this);
-        upper.setGravity(Gravity.TOP);
-        View cover = coverView(m.coverImage, m.title, 50, 72, m.coverPositionX, m.coverPositionY);
+        upper.setGravity(Gravity.CENTER_VERTICAL);
+        View cover = coverView(m.coverImage, m.title, 56, 80, m.coverPositionX, m.coverPositionY, m.coverZoom);
         cover.setOnClickListener(v -> openDetail(m.id));
-        upper.addView(cover, lp(dp(50), dp(72)));
-        margin(cover, 0, 0, 12, 0);
+        upper.addView(cover, lp(dp(56), dp(80)));
+        margin(cover, 0, 0, 10, 0);
         LinearLayout identity = new LinearLayout(this);
         identity.setOrientation(LinearLayout.VERTICAL);
+        identity.setGravity(Gravity.CENTER_VERTICAL);
+        identity.setMinimumHeight(dp(80));
+        identity.setOnClickListener(v -> openDetail(m.id));
+        identity.setContentDescription("Open details for " + m.title);
         TextView name = label(m.title, 16, TEXT);
         name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        name.setMaxLines(3);
+        name.setMaxLines(2);
         name.setEllipsize(android.text.TextUtils.TruncateAt.END);
         name.setOnClickListener(v -> openDetail(m.id));
-        name.setMinHeight(dp(48));
         identity.addView(name, lp(-1, -2));
-        add(identity, muted(typeName(m.type) + " · " + (p.rating == null ? "Unrated" : p.rating + "/10") + (m.isFavorite ? " · ★" : "")), 0, 4);
+        add(identity, muted(typeName(m.type) + " · " + (p.rating == null ? "Unrated" : p.rating + "/10") + (m.isFavorite ? " · ★" : "")), 4, 6);
         com.google.android.material.chip.ChipGroup tags = new com.google.android.material.chip.ChipGroup(this);
+        tags.setChipSpacingHorizontal(dp(4));
+        tags.setChipSpacingVertical(dp(4));
+        tags.setContentDescription("Genres for " + m.title);
         List<GenreEntity> genres = viewModel.repository.genresFor(m.id);
-        for (int i = 0; i < Math.min(2, genres.size()); i++)
-            tags.addView(chip(genres.get(i).name, color(genres.get(i).color)));
-        if (genres.size() > 2) tags.addView(muted("+" + (genres.size() - 2)));
+        int tagHeight = Math.max(dp(28), Math.round(12 * getResources().getDisplayMetrics().scaledDensity * 1.4f) + dp(8));
+        for (int i = 0; i < Math.min(2, genres.size()); i++) {
+            TextView tag = chip(genres.get(i).name, color(genres.get(i).color));
+            tag.setSingleLine(true);
+            tag.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            tag.setMaxWidth(dp(120));
+            tags.addView(tag, new ViewGroup.LayoutParams(-2, tagHeight));
+        }
+        if (genres.size() > 2) {
+            TextView moreGenres = muted("+" + (genres.size() - 2));
+            moreGenres.setGravity(Gravity.CENTER);
+            moreGenres.setPadding(dp(4), 0, dp(4), 0);
+            tags.addView(moreGenres, new ViewGroup.LayoutParams(-2, tagHeight));
+        }
         identity.addView(tags);
         upper.addView(identity, lp(0, -2, 1));
         TextView menu = action("⋮", v -> mediaMenu(v, m));
@@ -537,6 +554,7 @@ public class MainActivity extends AppCompatActivity {
         menu.setContentDescription("Actions for " + m.title);
         upper.addView(menu, lp(dp(48), dp(48)));
         margin(menu, 8, 0, 0, 0);
+        ((LinearLayout.LayoutParams) menu.getLayoutParams()).gravity = Gravity.TOP;
         row.addView(upper);
         add(row, muted(statusLabel(p.trackingStatus, m.type)), 8, 4);
         row.addView(progressControls(m, p), lp(-1, -2));
@@ -750,9 +768,10 @@ public class MainActivity extends AppCompatActivity {
         selectedImageUri = text(editorCover);
         editorCoverX = draft == null ? (m == null ? 0.5f : m.coverPositionX) : draft.getFloat("coverX", 0.5f);
         editorCoverY = draft == null ? (m == null ? 0.5f : m.coverPositionY) : draft.getFloat("coverY", 0.5f);
-        add(editorForm, muted("Device images are available offline. Uncached URL covers need a connection."), 0, 8);
+        editorCoverZoom = draft == null ? (m == null ? 1f : m.coverZoom) : draft.getFloat("coverZoom", 1f);
+        add(editorForm, muted("A small cover copy is saved in Watlis. Full-screen preview uses the original when available."), 0, 8);
         add(editorForm, muted("List thumbnail"), 4, 8);
-        editorPreview = coverView(selectedImageUri, "List thumbnail preview", 100, 144, editorCoverX, editorCoverY);
+        editorPreview = coverView(selectedImageUri, "List thumbnail preview", 100, 144, editorCoverX, editorCoverY, editorCoverZoom);
         editorForm.addView(editorPreview, lp(dp(100), dp(144)));
         editorPositionSummary = muted(positionSummary(editorCoverX, editorCoverY));
         add(editorForm, editorPositionSummary, 8, 12);
@@ -787,6 +806,8 @@ public class MainActivity extends AppCompatActivity {
         editorFavorite.setChecked(draft == null ? (m != null && m.isFavorite) : draft.getBoolean("favorite"));
         editorForm.addView(editorFavorite);
         TextView save = accentAction(m == null ? "Add media" : "Save changes", v -> saveEditor(m));
+        editorSaveButton = save;
+        editorSaving = false;
         add(editorForm, save, 16, 0);
         if (draft == null || formBaseline == null) formBaseline = draftKey(captureDraft());
         install(root);
@@ -843,7 +864,7 @@ public class MainActivity extends AppCompatActivity {
         hero.setCornerRadius(dp(20));
         hero.setStroke(dp(1), tint(BORDER, accent, .15f));
         header.setBackground(hero);
-        View detailCover = coverView(m.coverImage, m.title, 80, 114, m.coverPositionX, m.coverPositionY);
+        View detailCover = coverView(m.coverImage, m.title, 80, 114, m.coverPositionX, m.coverPositionY, m.coverZoom);
         if (m.coverImage != null && !m.coverImage.isEmpty()) {
             detailCover.setContentDescription("Preview cover for " + m.title);
             detailCover.setOnClickListener(v -> showFullCover(m));
@@ -1662,6 +1683,11 @@ public class MainActivity extends AppCompatActivity {
                 }
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
+                    if (screen.equals("editor") && editorSaveButton != null) {
+                        editorSaving = false;
+                        editorSaveButton.setEnabled(true);
+                        editorSaveButton.setText(editingId == null ? "Add media" : "Save changes");
+                    }
                     if (!screen.equals("editor")) refreshScreen();
                     new MaterialAlertDialogBuilder(this).setTitle("Could not save changes")
                             .setMessage("Your change was not saved. " + (error instanceof IllegalArgumentException ? error.getMessage() : "Please try again."))
@@ -1686,6 +1712,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void navigateBack() {
+        if (screen.equals("editor") && editorSaving) { toast("Saving your cover…"); return; }
         if (screen.equals("editor")) {
             Runnable discard = () -> {
                 formDraft = null;
@@ -1827,18 +1854,25 @@ public class MainActivity extends AppCompatActivity {
         return group;
     }
 
-    private PositionedCoverView coverView(String source, String title, int width, int height, float positionX, float positionY) {
+    private PositionedCoverView coverView(String source, String title, int width, int height, float positionX, float positionY, float zoom) {
         PositionedCoverView image = new PositionedCoverView(this);
         image.setContentDescription("Cover for " + title);
         image.setCoverPosition(positionX, positionY);
+        image.setCoverZoom(zoom);
         image.setBackground(bg(SURFACE_HIGH, 6));
         image.setClipToOutline(true);
         android.graphics.drawable.Drawable placeholder = androidx.appcompat.content.res.AppCompatResources.getDrawable(this, R.drawable.cover_placeholder);
         image.setImageDrawable(placeholder);
         if (source != null && !source.trim().isEmpty()) {
-            coil.request.ImageRequest request = new coil.request.ImageRequest.Builder(this).data(source)
-                    .size(dp(width), dp(height)).scale(coil.size.Scale.FILL).placeholder(placeholder).error(placeholder).target(image).build();
-            coil.Coil.imageLoader(this).enqueue(request);
+            java.lang.ref.WeakReference<PositionedCoverView> reference = new java.lang.ref.WeakReference<>(image);
+            CoverStore.get(this).ensure(source, file -> {
+                PositionedCoverView target = reference.get();
+                if (target == null || isDestroyed() || file == null) return;
+                coil.request.ImageRequest request = new coil.request.ImageRequest.Builder(this).data(file)
+                        .size(Math.min(768, Math.round(dp(width) * zoom)), Math.min(768, Math.round(dp(height) * zoom)))
+                        .scale(coil.size.Scale.FIT).placeholder(placeholder).error(placeholder).target(target).build();
+                coil.Coil.imageLoader(this).enqueue(request);
+            });
         }
         return image;
     }
@@ -1847,6 +1881,7 @@ public class MainActivity extends AppCompatActivity {
         if (pendingPickedCover == null || editorCover == null || !screen.equals("editor")) return;
         editorCoverX = 0.5f;
         editorCoverY = 0.5f;
+        editorCoverZoom = 1f;
         selectedImageUri = pendingPickedCover;
         pendingPickedCover = null;
         editorCover.setText(selectedImageUri);
@@ -1865,12 +1900,12 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         updateCoverPreview();
-        float[] position = {editorCoverX, editorCoverY};
+        float[] position = {editorCoverX, editorCoverY, editorCoverZoom};
         com.google.android.material.bottomsheet.BottomSheetDialog sheet = new com.google.android.material.bottomsheet.BottomSheetDialog(this);
         LinearLayout form = dialogForm();
         add(form, sectionTitle("Cover position"), 0, 8);
         add(form, muted("Choose which part appears in your list. The full image stays unchanged."), 0, 16);
-        PositionedCoverView preview = coverView(text(editorCover), "Position preview", 100, 144, position[0], position[1]);
+        PositionedCoverView preview = coverView(text(editorCover), "Position preview", 256, 368, position[0], position[1], position[2]);
         preview.setContentDescription("List crop preview");
         LinearLayout frame = new LinearLayout(this);
         frame.setGravity(Gravity.CENTER);
@@ -1881,6 +1916,14 @@ public class MainActivity extends AppCompatActivity {
         TextView summary = muted(positionSummary(position[0], position[1]));
         summary.setGravity(Gravity.CENTER);
         add(form, summary, 0, 16);
+        TextView zoomLabel = muted(zoomSummary(position[2]));
+        add(form, zoomLabel, 0, 4);
+        android.widget.SeekBar zoom = new android.widget.SeekBar(this);
+        zoom.setMax(200);
+        zoom.setProgress(Math.round((position[2] - 1) * 100));
+        zoom.setContentDescription("Cover zoom");
+        zoom.setMinimumHeight(dp(48));
+        add(form, zoom, 0, 12);
         add(form, muted("Horizontal · Left to right"), 0, 4);
         android.widget.SeekBar horizontal = new android.widget.SeekBar(this);
         horizontal.setMax(100);
@@ -1905,21 +1948,27 @@ public class MainActivity extends AppCompatActivity {
             public void onProgressChanged(android.widget.SeekBar bar, int progress, boolean fromUser) {
                 position[0] = horizontal.getProgress() / 100f;
                 position[1] = vertical.getProgress() / 100f;
+                position[2] = 1 + zoom.getProgress() / 100f;
                 preview.setCoverPosition(position[0], position[1]);
+                preview.setCoverZoom(position[2]);
                 summary.setText(positionSummary(position[0], position[1]));
+                zoomLabel.setText(zoomSummary(position[2]));
             }
         };
         horizontal.setOnSeekBarChangeListener(change);
         vertical.setOnSeekBarChangeListener(change);
+        zoom.setOnSeekBarChangeListener(change);
         add(form, action("Center image", v -> {
             horizontal.setProgress(50);
             vertical.setProgress(50);
+            zoom.setProgress(0);
         }), 0, 12);
         LinearLayout buttons = new LinearLayout(this);
         buttons.addView(action("Cancel", v -> sheet.dismiss()), lp(0, -2, 1));
         TextView apply = accentAction("Use position", v -> {
             editorCoverX = position[0];
             editorCoverY = position[1];
+            editorCoverZoom = position[2];
             updateCoverPreview();
             sheet.dismiss();
         });
@@ -1930,6 +1979,8 @@ public class MainActivity extends AppCompatActivity {
         sheet.show();
         sheet.getBehavior().setState(com.google.android.material.bottomsheet.BottomSheetBehavior.STATE_EXPANDED);
     }
+
+    private String zoomSummary(float zoom) { return "Zoom · " + Math.round(zoom * 100) + "%"; }
 
     private void showFullCover(MediaEntity media) {
         android.app.Dialog dialog = new android.app.Dialog(this, R.style.Theme_Watlis);
@@ -1978,8 +2029,10 @@ public class MainActivity extends AppCompatActivity {
         });
         // Request a screen-sized decode only when opened; never decode an unbounded original.
         int edge = Math.min(2560, Math.max(getResources().getDisplayMetrics().widthPixels, getResources().getDisplayMetrics().heightPixels) * 2);
+        coil.request.Disposable[] loading = new coil.request.Disposable[2];
+        boolean[] closed = {false};
         coil.request.ImageRequest request = new coil.request.ImageRequest.Builder(this).data(media.coverImage)
-                .size(edge, edge).scale(coil.size.Scale.FIT).target(new coil.target.Target() {
+                .size(edge, edge).scale(coil.size.Scale.FIT).memoryCachePolicy(coil.request.CachePolicy.DISABLED).target(new coil.target.Target() {
                     @Override
                     public void onStart(android.graphics.drawable.Drawable placeholder) {
                         status.setText("Loading cover…");
@@ -1995,12 +2048,33 @@ public class MainActivity extends AppCompatActivity {
 
                     @Override
                     public void onError(android.graphics.drawable.Drawable error) {
-                        status.setText("Image unavailable. Check the file or try again when connected.");
+                        CoverStore.get(MainActivity.this).ensure(media.coverImage, file -> {
+                            if (closed[0] || isDestroyed()) return;
+                            if (file == null) {
+                                status.setText("Image unavailable. No saved thumbnail yet.");
+                                return;
+                            }
+                            loading[1] = coil.Coil.imageLoader(MainActivity.this).enqueue(
+                                    new coil.request.ImageRequest.Builder(MainActivity.this).data(file)
+                                            .size(CoverStore.MAX_EDGE, CoverStore.MAX_EDGE).scale(coil.size.Scale.FIT)
+                                            .target(new coil.target.Target() {
+                                                @Override public void onSuccess(android.graphics.drawable.Drawable saved) {
+                                                    if (closed[0]) return;
+                                                    image.setImageDrawable(saved);
+                                                    fit.setEnabled(true); zoom.setEnabled(true);
+                                                    status.setText("Original unavailable · Saved cover preview");
+                                                }
+                                                @Override public void onError(android.graphics.drawable.Drawable missing) {
+                                                    status.setText("Saved cover unavailable. Choose another image.");
+                                                }
+                                            }).build());
+                        });
                     }
                 }).build();
-        coil.request.Disposable loading = coil.Coil.imageLoader(this).enqueue(request);
+        loading[0] = coil.Coil.imageLoader(this).enqueue(request);
         dialog.setOnDismissListener(d -> {
-            loading.dispose();
+            closed[0] = true;
+            for (coil.request.Disposable task : loading) if (task != null) task.dispose();
             image.setImageDrawable(null);
         });
         dialog.show();
@@ -2014,11 +2088,12 @@ public class MainActivity extends AppCompatActivity {
         if (!source.equals(selectedImageUri)) {
             editorCoverX = 0.5f;
             editorCoverY = 0.5f;
+            editorCoverZoom = 1f;
             selectedImageUri = source;
         }
         int index = editorForm.indexOfChild(editorPreview);
         editorForm.removeView(editorPreview);
-        editorPreview = coverView(source, "List thumbnail preview", 100, 144, editorCoverX, editorCoverY);
+        editorPreview = coverView(source, "List thumbnail preview", 100, 144, editorCoverX, editorCoverY, editorCoverZoom);
         editorForm.addView(editorPreview, index, lp(dp(100), dp(144)));
         editorPositionSummary.setText(positionSummary(editorCoverX, editorCoverY));
     }
@@ -2198,6 +2273,7 @@ public class MainActivity extends AppCompatActivity {
         b.putString("cover", text(editorCover));
         b.putFloat("coverX", editorCoverX);
         b.putFloat("coverY", editorCoverY);
+        b.putFloat("coverZoom", editorCoverZoom);
         b.putString("progress", text(editorProgress));
         b.putString("rating", text(editorRating));
         b.putString("tracking", editorTracking.getSelectedItem().toString());
@@ -2214,10 +2290,12 @@ public class MainActivity extends AppCompatActivity {
             result.append(value.length()).append(':').append(value);
         }
         return result.append(b.getBoolean("favorite")).append(Arrays.toString(b.getLongArray("genres")))
-                .append(':').append(b.getFloat("coverX", 0.5f)).append(':').append(b.getFloat("coverY", 0.5f)).toString();
+                .append(':').append(b.getFloat("coverX", 0.5f)).append(':').append(b.getFloat("coverY", 0.5f))
+                .append(':').append(b.getFloat("coverZoom", 1f)).toString();
     }
 
     private void saveEditor(MediaEntity existing) {
+        if (editorSaving) return;
         if (text(editorTitle).isEmpty()) {
             editorTitle.setError("Title is required");
             editorTitle.requestFocus();
@@ -2259,17 +2337,27 @@ public class MainActivity extends AppCompatActivity {
         m.isFavorite = editorFavorite.isChecked();
         m.coverPositionX = cover.equals(selectedImageUri) ? editorCoverX : 0.5f;
         m.coverPositionY = cover.equals(selectedImageUri) ? editorCoverY : 0.5f;
+        m.coverZoom = cover.equals(selectedImageUri) ? editorCoverZoom : 1f;
         UserProgressEntity p = new UserProgressEntity();
         p.currentProgress = progress;
         p.rating = rating;
         p.trackingStatus = editorTracking.getSelectedItem().toString();
         p.notes = text(editorNotes);
         List<Long> genres = new ArrayList<>(editorGenres);
-        write(() -> viewModel.repository.saveMedia(m, p, genres), () -> {
-            formBaseline = null;
-            formDraft = null;
-            detailOrigin = editorOrigin.equals("stats") ? "stats" : "home";
-            showDetail(m.id);
+        editorSaving = true;
+        editorSaveButton.setEnabled(false);
+        editorSaveButton.setText("Saving…");
+        CoverStore.get(this).ensure(m.coverImage, file -> {
+            if (isDestroyed() || isFinishing()) return;
+            if (m.coverImage != null && file == null)
+                toast("Cover could not be saved offline. Keep the original and try again when available.");
+            write(() -> viewModel.repository.saveMedia(m, p, genres), () -> {
+                editorSaving = false;
+                formBaseline = null;
+                formDraft = null;
+                detailOrigin = editorOrigin.equals("stats") ? "stats" : "home";
+                showDetail(m.id);
+            });
         });
     }
 

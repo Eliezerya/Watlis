@@ -6,7 +6,7 @@ import androidx.room.Room;
 import androidx.room.RoomDatabase;
 
 @Database(entities = {MediaEntity.class, GenreEntity.class, MediaGenreCrossRef.class,
-        UserProgressEntity.class, StoryMemoryEntity.class, CharacterEntity.class, MediaTypeEntity.class}, version = 4, exportSchema = false)
+        UserProgressEntity.class, StoryMemoryEntity.class, CharacterEntity.class, MediaTypeEntity.class}, version = 5, exportSchema = false)
 public abstract class WatlisDatabase extends RoomDatabase {
     public abstract MediaDao mediaDao();
     public abstract ProgressDao progressDao();
@@ -18,11 +18,18 @@ public abstract class WatlisDatabase extends RoomDatabase {
     public static WatlisDatabase get(Context context) {
         if (INSTANCE == null) {
             synchronized (WatlisDatabase.class) {
-                if (INSTANCE == null) INSTANCE = Room.databaseBuilder(context.getApplicationContext(), WatlisDatabase.class, "watlis.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build();
+                if (INSTANCE == null) INSTANCE = Room.databaseBuilder(context.getApplicationContext(), WatlisDatabase.class, "watlis.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build();
             }
         }
         return INSTANCE;
     }
+
+    public static final androidx.room.migration.Migration MIGRATION_4_5 =
+            new androidx.room.migration.Migration(4, 5) {
+        @Override public void migrate(@androidx.annotation.NonNull androidx.sqlite.db.SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE media ADD COLUMN coverZoom REAL NOT NULL DEFAULT 1.0");
+        }
+    };
 
     public static final androidx.room.migration.Migration MIGRATION_3_4 =
             new androidx.room.migration.Migration(3, 4) {

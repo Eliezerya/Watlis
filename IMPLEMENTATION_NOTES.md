@@ -6,11 +6,15 @@ The current `tsugi-design-handoff/` folder is empty. The written handoff was rec
 
 Implemented controls include search and clear, multi-select filters with draft/reset/apply behavior, removable filters, sorting in both directions, Home and Detail progress updates, cover picking and preview, media editing, focused story/rating/status/notes editors, character management, genre management, and statistics. Media drafts and list navigation state survive Activity recreation.
 
-Room access runs on the ViewModel executor. Quick progress writes use the current persisted value in a transaction, and metadata edits preserve progress recency. Schema version 4 retains the earlier migrations, adds normalized cover-position coordinates (v3), and adds editable media types (v4). Snapshot loading uses a fixed number of bulk queries instead of four queries per title.
+Room access runs on the ViewModel executor. Quick progress writes use the current persisted value in a transaction, and metadata edits preserve progress recency. Schema version 5 retains the earlier migrations, adds normalized cover-position coordinates (v3), editable media types (v4), and 1x–3x cover zoom (v5, default 1x for existing media). Snapshot loading uses a fixed number of bulk queries instead of four queries per title.
 
 Media types are managed from the drawer or created inline in the media editor. Names are case-insensitively unique, with stable keys and a chapter/episode progress unit. Renames preserve associations; deleting an in-use type requires a replacement and preserves tracking, notes, covers, and genres. At least one type must remain. JSON backups include type definitions and cover positions and remain compatible with version-1 backups.
 
-Detail cover taps open a full-screen, uncropped preview with pinch/pan, double-tap, and explicit zoom/fit controls. Images decode only when opened, bounded to the display size (up to 2560 pixels on an edge). Thumbnail positioning stores two floats and reuses an image matrix; it does not duplicate cover files. List cards and Detail accents follow the first alphabetically sorted genre, with contrast-adjusted accents for dark colors. The red adaptive book/bookmark launcher icon uses small vector resources and includes a monochrome variant.
+Detail cover taps open a full-screen, uncropped preview with pinch/pan, double-tap, and explicit zoom/fit controls. Original images decode only for explicit previews (up to 2560 pixels per edge) or one-time thumbnail creation. Full-screen originals are not retained in the decoded-memory cache after closing. If the original is unavailable, the preview falls back to the saved thumbnail and labels the reduced-quality fallback.
+
+`CoverStore` saves an uncropped JPEG (78% quality, at most 768px on its longest edge) in app-private `files/cover_thumbnails`, keyed by source hash. Generation is serialized and compression runs off the UI thread; existing saved files bypass the generation queue. List/Detail thumbnails decode at bounded display sizes. Crop position and zoom use a matrix and never create extra image copies. Saving a cover waits for thumbnail preparation and warns if the source is unavailable; existing covers acquire their copy when loaded. Already-missing originals cannot be recovered without a previously saved copy. Copies survive cache clearing/source deletion but not app-data clearing or uninstall; JSON version-3 exports include saved thumbnails and zoom, and imports still accept earlier backups. Import file reading runs off the UI thread. Saved copies are retained in app files, not in a disposable image cache.
+
+List cards use vertically centered 56×80dp covers beside the title, score/type, and genres. Genre tags and the +N indicator have matching, font-aware heights, with wrapping rather than clipping. List cards and Detail accents follow the first alphabetically sorted genre, with contrast-adjusted accents for dark colors. The red adaptive book/bookmark launcher icon uses small vector resources and includes a monochrome variant.
 
 Detail typography distinguishes 18sp section headings, muted 11sp uppercase field labels, and 16sp reminder values (18sp for the main character). Genre color is reserved for small section markers and actions instead of coloring every heading. Reminder edit controls use an 18dp vector inside a 32dp visual surface while retaining 48dp touch targets. Expansion and personal-note editing use quiet text actions, with no empty expansion row for short values. Reminder editing and expansion have a dedicated UI regression test.
 
@@ -28,14 +32,14 @@ $adb = 'C:/Users/andel/AppData/Local/Android/Sdk/platform-tools/adb.exe'
 & $adb shell am instrument -w com.watlis.app.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-Verified on September 8, 2026:
+Verified on September 10, 2026:
 
 - Debug APK build and local unit test task passed.
-- Lint: zero errors; 41 warnings remain, including dependency-version suggestions, unused starter resources, text localization, and accessibility warnings.
-- All 17 instrumentation tests passed on Pixel 7 / Android 15. Coverage includes database migration, cascade deletion, genre/type uniqueness, decimal/rapid progress, recency preservation, rating averages, invalid input, form recreation, story editing, drawer navigation, filters, cover matrices/full-screen preview/position persistence, type create/rename/reassignment/delete, backup compatibility/rollback, and reminder typography/edit/expansion interactions.
+- Lint: zero errors; 44 warnings remain, including dependency-version suggestions, unused starter resources, text localization, and accessibility warnings.
+- All 19 instrumentation tests passed on Pixel 7 / Android 15. Coverage includes schema upgrades, CRUD/relations, rapid progress/recency, form recreation, filtering and genre navigation, reminder editing, genre row bounds/alignment, zoom persistence and validation, original-resolution preview, source-file deletion fallback, bounded saved thumbnails, and thumbnail backup restoration.
 - Installed and launched the debug APK successfully.
-- Visually inspected Home and Detail at normal size and at 320dp width with font scale 1.3, plus the red icon in the launcher. The reminder hierarchy/edit/expansion regression also passed at 320dp with font scale 1.3 after the typography update. Restored emulator display settings afterward.
-- One cold debug launch measured 1.16 seconds on this emulator with the current small collection; this is a smoke-check measurement, not a large-library or real-device benchmark. Debug APK is approximately 16 MB. No new runtime dependencies were added for these changes.
+- Visually inspected the corrected Home genre rows at normal size and at 320dp width with font scale 1.3. All three targeted cover/genre-layout tests also passed at the narrow size, including saved zoom and missing-original fallback. Prior checks covered Detail typography and the launcher icon. Restored emulator display settings afterward.
+- One cold debug launch measured 0.95 seconds on this emulator with the current small collection; this is a smoke-check measurement, not a large-library or real-device benchmark. Debug APK is approximately 16 MB. No new runtime dependencies were added for these changes.
 
 APK: `app/build/outputs/apk/debug/app-debug.apk`.
 

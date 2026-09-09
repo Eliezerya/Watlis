@@ -42,6 +42,12 @@ public class CoverInstrumentedTest {
             RectF bottom=new RectF(0,0,100,300);
             crop.setCoverPosition(0.5f,1);crop.getImageMatrix().mapRect(bottom);
             assertEquals(144,bottom.bottom,0.01f);
+            crop.setCoverZoom(2);
+            RectF zoomed=new RectF(0,0,100,300);crop.getImageMatrix().mapRect(zoomed);
+            assertEquals(200,zoomed.width(),0.01f);
+            assertEquals(144,zoomed.bottom,0.01f);
+            crop.setCoverZoom(Float.NaN);assertEquals(1,crop.getCoverZoom(),0);
+            crop.setCoverZoom(10);assertEquals(3,crop.getCoverZoom(),0);
             assertSame(drawable,crop.getDrawable());
             CoverPreviewView full=new CoverPreviewView(context);
             full.setImageDrawable(drawable);full.layout(0,0,300,300);
@@ -66,12 +72,13 @@ public class CoverInstrumentedTest {
         android.net.Uri uri=context.getContentResolver().insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values);
         assertNotNull(uri);
         MediaEntity m=new MediaEntity();m.title="Cover test "+UUID.randomUUID();m.coverImage=uri.toString();
+        boolean sourceDeleted=false;
         try {
-            Bitmap bitmap=Bitmap.createBitmap(200,600,Bitmap.Config.ARGB_8888);
+            Bitmap bitmap=Bitmap.createBitmap(800,2400,Bitmap.Config.ARGB_8888);
             Canvas canvas=new Canvas(bitmap);Paint paint=new Paint();
-            paint.setColor(Color.RED);canvas.drawRect(0,0,200,200,paint);
-            paint.setColor(Color.GREEN);canvas.drawRect(0,200,200,400,paint);
-            paint.setColor(Color.BLUE);canvas.drawRect(0,400,200,600,paint);
+            paint.setColor(Color.RED);canvas.drawRect(0,0,800,800,paint);
+            paint.setColor(Color.GREEN);canvas.drawRect(0,800,800,1600,paint);
+            paint.setColor(Color.BLUE);canvas.drawRect(0,1600,800,2400,paint);
             try(java.io.OutputStream stream=context.getContentResolver().openOutputStream(uri)){bitmap.compress(Bitmap.CompressFormat.PNG,100,stream);}
             bitmap.recycle();values.clear();values.put(android.provider.MediaStore.Images.Media.IS_PENDING,0);
             context.getContentResolver().update(uri,values,null,null);
@@ -83,12 +90,18 @@ public class CoverInstrumentedTest {
                 onView(withContentDescription("Preview cover for "+m.title)).perform(click());
                 waitForText("Pinch to zoom · Double-tap to fit");
                 onView(withContentDescription("Full cover image")).check(matches(isDisplayed()));
+                onView(withContentDescription("Full cover image")).check((view,error) -> {
+                    if(error!=null)throw error;
+                    assertTrue("Full preview uses the original resolution",((CoverPreviewView)view).getDrawable().getIntrinsicHeight()>768);
+                });
                 onView(withText("Zoom in")).perform(click());
                 onView(withText("Fit image")).perform(click());
                 onView(withContentDescription("Close cover preview")).perform(click());
                 onView(withText("Edit media")).perform(scrollTo(),click());
                 onView(withText("Adjust cover position")).perform(scrollTo(),click());
                 onView(withContentDescription("Vertical cover position")).perform(setPosition(90));
+                onView(withContentDescription("Cover zoom")).perform(scrollTo(),setPosition(75));
+                onView(withText("Zoom · 175%")).perform(scrollTo()).check(matches(isDisplayed()));
                 onView(withText("Use position")).perform(scrollTo(),click());
                 scenario.recreate();
                 waitForText("Edit media");
@@ -97,15 +110,41 @@ public class CoverInstrumentedTest {
                 long until=System.currentTimeMillis()+10000;
                 while(db.mediaDao().getById(m.id).coverPositionY!=0.9f&&System.currentTimeMillis()<until)Thread.sleep(50);
                 assertEquals(0.9f,db.mediaDao().getById(m.id).coverPositionY,0);
+                assertEquals(1.75f,db.mediaDao().getById(m.id).coverZoom,0);
                 pressBack();
                 onView(withContentDescription("Cover for "+m.title)).check((view,error) -> {
                     if(error!=null)throw error;
                     assertEquals(0.9f,((PositionedCoverView)view).getCoverPositionY(),0);
+                    assertEquals(1.75f,((PositionedCoverView)view).getCoverZoom(),0);
                 });
+                java.io.File thumbnail=CoverStore.get(context).fileFor(m.coverImage);
+                assertTrue(thumbnail.isFile());
+                android.graphics.BitmapFactory.Options bounds=new android.graphics.BitmapFactory.Options();
+                bounds.inJustDecodeBounds=true;android.graphics.BitmapFactory.decodeFile(thumbnail.getPath(),bounds);
+                assertTrue(bounds.outWidth<=768&&bounds.outHeight<=768);
+                assertTrue(thumbnail.length()<1024*1024);
+                // Delete only our generated source, then verify a fresh screen and preview retain the saved cover.
+                context.getContentResolver().delete(uri,null,null);
+                sourceDeleted=true;
+                scenario.recreate();waitForText("+ Add");
+                onView(withContentDescription("Cover for "+m.title)).perform(click());
+                onView(withContentDescription("Preview cover for "+m.title)).perform(click());
+                waitForText("Original unavailable · Saved cover preview");
+                onView(withContentDescription("Full cover image")).check((view,error) -> {
+                    if(error!=null)throw error;
+                    assertTrue(((CoverPreviewView)view).getDrawable() instanceof BitmapDrawable);
+                });
+                onView(withContentDescription("Close cover preview")).perform(click());
+                String encoded=CoverStore.get(context).exportThumbnail(m.coverImage);
+                assertNotNull(encoded);
+                assertTrue(thumbnail.delete());
+                CoverStore.get(context).importThumbnail(m.coverImage,encoded);
+                assertTrue(thumbnail.isFile());
             }
         } finally {
             if(m.id!=0)db.mediaDao().delete(m);
-            context.getContentResolver().delete(uri,null,null);
+            if(!sourceDeleted)context.getContentResolver().delete(uri,null,null);
+            CoverStore.get(context).fileFor(m.coverImage).delete();
         }
     }
 

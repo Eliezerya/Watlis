@@ -15,6 +15,8 @@ public class MediaEntity {
     public float coverPositionX = 0.5f;
     @androidx.room.ColumnInfo(defaultValue = "0.5")
     public float coverPositionY = 0.5f;
+    @androidx.room.ColumnInfo(defaultValue = "1.0")
+    public float coverZoom = 1f;
     @NonNull public String releaseStatus = "ongoing";
     public long createdAt;
     public long updatedAt;

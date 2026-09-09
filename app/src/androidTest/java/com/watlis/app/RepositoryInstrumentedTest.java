@@ -115,7 +115,7 @@ public class RepositoryInstrumentedTest {
     @Test public void backupRoundTripKeepsTypesCoverPositionAndRollsBackInvalidData() throws Exception {
         MediaTypeEntity type=new MediaTypeEntity();type.name="Web series";type.usesEpisodes=true;
         repository.saveMediaType(type);
-        long id=media("Backup",9);MediaEntity m=repository.media(id);m.type=type.key;m.coverPositionY=.8f;
+        long id=media("Backup",9);MediaEntity m=repository.media(id);m.type=type.key;m.coverPositionY=.8f;m.coverZoom=2.25f;
         repository.saveMedia(m,repository.progress(id),Collections.emptyList());
         long recency=repository.progress(id).lastUpdatedAt;
         String backup=repository.exportToJson();
@@ -124,6 +124,7 @@ public class RepositoryInstrumentedTest {
         assertEquals(type.key,repository.media(id).type);
         assertTrue(repository.mediaType(type.key).usesEpisodes);
         assertEquals(.8f,repository.media(id).coverPositionY,0);
+        assertEquals(2.25f,repository.media(id).coverZoom,0);
         assertEquals(recency,repository.progress(id).lastUpdatedAt);
         org.json.JSONObject broken=new org.json.JSONObject(backup);broken.remove("media");
         try {repository.importFromJson(broken.toString());fail("Invalid backup accepted");}
@@ -132,21 +133,31 @@ public class RepositoryInstrumentedTest {
         assertNotNull(db.mediaTypeDao().get(type.key));
         org.json.JSONObject legacy=new org.json.JSONObject(backup);legacy.put("version",1);legacy.remove("mediaTypes");
         legacy.getJSONArray("media").getJSONObject(0).put("type","manga");
+        legacy.getJSONArray("media").getJSONObject(0).remove("coverZoom");
         repository.importFromJson(legacy.toString());
         assertEquals(4,repository.mediaTypes().size());
         assertEquals("manga",repository.media(id).type);
+        assertEquals(1f,repository.media(id).coverZoom,0);
     }
     @Test public void coverPositionPersistsWithoutChangingProgressRecency() {
         long id=media("Cover",null);
         long updated=repository.progress(id).lastUpdatedAt;
-        MediaEntity m=repository.media(id);m.coverPositionX=0.2f;m.coverPositionY=0.85f;
+        MediaEntity m=repository.media(id);m.coverPositionX=0.2f;m.coverPositionY=0.85f;m.coverZoom=1.5f;
         repository.saveMedia(m,repository.progress(id),Collections.emptyList());
         assertEquals(0.2f,db.mediaDao().getById(id).coverPositionX,0);
         assertEquals(0.85f,db.mediaDao().getById(id).coverPositionY,0);
+        assertEquals(1.5f,db.mediaDao().getById(id).coverZoom,0);
         assertEquals(updated,db.progressDao().get(id).lastUpdatedAt);
         m.coverPositionX=Float.NaN;
         try{repository.saveMedia(m,repository.progress(id),Collections.emptyList());fail("Invalid position accepted");}
         catch(IllegalArgumentException expected){}
         assertEquals(0.2f,db.mediaDao().getById(id).coverPositionX,0);
+        m.coverPositionX=.2f;
+        for(float zoom:new float[]{0,4,Float.NaN,Float.POSITIVE_INFINITY}) {
+            m.coverZoom=zoom;
+            try {repository.saveMedia(m,repository.progress(id),Collections.emptyList());fail("Invalid zoom accepted");}
+            catch(IllegalArgumentException expected) {}
+        }
+        assertEquals(1.5f,db.mediaDao().getById(id).coverZoom,0);
     }
 }

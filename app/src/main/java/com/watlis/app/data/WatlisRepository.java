@@ -8,6 +8,7 @@ import java.util.Map;
 /** Room work runs on the ViewModel executor; UI reads the last complete local snapshot. */
 public class WatlisRepository {
     private final WatlisDatabase db;
+    private final com.watlis.app.CoverStore coverStore;
     private volatile Snapshot snapshot = new Snapshot();
 
     private static class Snapshot {
@@ -20,7 +21,8 @@ public class WatlisRepository {
         Map<Long, List<CharacterEntity>> characters = new HashMap<>();
     }
 
-    public WatlisRepository(WatlisDatabase db) { this.db = db; }
+    public WatlisRepository(WatlisDatabase db) { this(db, null); }
+    public WatlisRepository(WatlisDatabase db, com.watlis.app.CoverStore coverStore) { this.db = db; this.coverStore = coverStore; }
 
     public void refresh() {
         Snapshot next = new Snapshot();
@@ -116,6 +118,8 @@ public class WatlisRepository {
 
     public long saveMedia(MediaEntity media, UserProgressEntity progress, List<Long> genreIds) {
         validateProgress(progress.currentProgress);
+        if (!Float.isFinite(media.coverZoom) || media.coverZoom < 1 || media.coverZoom > 3)
+            throw new IllegalArgumentException("Cover zoom must be between 1 and 3");
         if (!Float.isFinite(media.coverPositionX) || media.coverPositionX < 0 || media.coverPositionX > 1
                 || !Float.isFinite(media.coverPositionY) || media.coverPositionY < 0 || media.coverPositionY > 1)
             throw new IllegalArgumentException("Cover position must be between 0 and 1");
@@ -250,7 +254,7 @@ public class WatlisRepository {
     public String exportToJson() {
         try {
             org.json.JSONObject root = new org.json.JSONObject();
-            root.put("version", 2);
+            root.put("version", 3);
             org.json.JSONArray typeArray = new org.json.JSONArray();
             for (MediaTypeEntity type : snapshot.types) {
                 org.json.JSONObject value = new org.json.JSONObject();
@@ -272,6 +276,8 @@ public class WatlisRepository {
                 o.put("id", m.id); o.put("title", m.title); o.put("type", m.type);
                 if (m.coverImage != null) o.put("coverImage", m.coverImage);
                 o.put("coverPositionX", m.coverPositionX); o.put("coverPositionY", m.coverPositionY);
+                o.put("coverZoom", m.coverZoom);
+                if (coverStore != null) o.put("coverThumbnail", coverStore.exportThumbnail(m.coverImage));
                 o.put("releaseStatus", m.releaseStatus);
                 o.put("createdAt", m.createdAt); o.put("updatedAt", m.updatedAt);
                 o.put("isFavorite", m.isFavorite);
@@ -359,6 +365,10 @@ public class WatlisRepository {
                     m.coverImage = nullStr(o, "coverImage");
                     m.coverPositionX = (float) o.optDouble("coverPositionX", 0.5);
                     m.coverPositionY = (float) o.optDouble("coverPositionY", 0.5);
+                    m.coverZoom = (float) o.optDouble("coverZoom", 1);
+                    if (!Float.isFinite(m.coverZoom) || m.coverZoom < 1 || m.coverZoom > 3)
+                        throw new IllegalArgumentException("Invalid cover zoom in backup");
+                    if (coverStore != null) coverStore.importThumbnail(m.coverImage, nullStr(o, "coverThumbnail"));
                     m.releaseStatus = o.optString("releaseStatus", "ongoing");
                     m.createdAt = o.optLong("createdAt", 0); m.updatedAt = o.optLong("updatedAt", 0);
                     m.isFavorite = o.optBoolean("isFavorite", false);

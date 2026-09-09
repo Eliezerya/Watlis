@@ -8,7 +8,7 @@ import androidx.appcompat.widget.AppCompatImageView;
 /** Moves the visible crop without creating a second bitmap or modifying the source. */
 public class PositionedCoverView extends AppCompatImageView {
     private final Matrix cropMatrix = new Matrix();
-    private float positionX = 0.5f, positionY = 0.5f;
+    private float positionX = 0.5f, positionY = 0.5f, coverZoom = 1f;
 
     public PositionedCoverView(Context context) {
         super(context);
@@ -23,6 +23,11 @@ public class PositionedCoverView extends AppCompatImageView {
 
     public float getCoverPositionX() { return positionX; }
     public float getCoverPositionY() { return positionY; }
+    public void setCoverZoom(float zoom) {
+        coverZoom = Float.isFinite(zoom) ? Math.max(1, Math.min(3, zoom)) : 1;
+        updateCrop();
+    }
+    public float getCoverZoom() { return coverZoom; }
 
     @Override public void setImageDrawable(Drawable drawable) {
         super.setImageDrawable(drawable);
@@ -40,7 +45,7 @@ public class PositionedCoverView extends AppCompatImageView {
         float width = getWidth() - getPaddingLeft() - getPaddingRight();
         float height = getHeight() - getPaddingTop() - getPaddingBottom();
         if (width <= 0 || height <= 0 || drawable.getIntrinsicWidth() <= 0 || drawable.getIntrinsicHeight() <= 0) return;
-        float scale = Math.max(width / drawable.getIntrinsicWidth(), height / drawable.getIntrinsicHeight());
+        float scale = Math.max(width / drawable.getIntrinsicWidth(), height / drawable.getIntrinsicHeight()) * coverZoom;
         cropMatrix.setScale(scale, scale);
         cropMatrix.postTranslate((width - drawable.getIntrinsicWidth() * scale) * positionX,
                 (height - drawable.getIntrinsicHeight() * scale) * positionY);

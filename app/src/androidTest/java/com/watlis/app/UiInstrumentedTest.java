@@ -178,6 +178,44 @@ public class UiInstrumentedTest {
             db().genreDao().delete(genre.id);
         }
     }
+    @Test public void listGenresAndOverflowBadgeAreNotClippedAndCoverAlignsWithIdentity() throws Exception {
+        String suffix=UUID.randomUUID().toString().substring(0,6);
+        WatlisRepository repo=new WatlisRepository(db());
+        MediaEntity m=new MediaEntity();m.title="Layout check "+suffix;
+        List<Long> genreIds=new ArrayList<>();
+        try {
+            for(String name:new String[]{"Action ","Adventure ","Drama ","School "}) {
+                GenreEntity g=new GenreEntity();g.name=name+suffix;g.id=repo.addGenre(g);genreIds.add(g.id);
+            }
+            repo.saveMedia(m,new UserProgressEntity(),genreIds);
+            try(ActivityScenario<MainActivity> scenario=ActivityScenario.launch(MainActivity.class)) {
+                waitHome();
+                onView(withContentDescription("Search your titles")).perform(replaceText(m.title),closeSoftKeyboard());
+                onView(withContentDescription("Genres for "+m.title)).perform(scrollTo()).check((view,error) -> {
+                    if(error!=null)throw error;
+                    android.view.ViewGroup group=(android.view.ViewGroup)view;
+                    assertEquals(3,group.getChildCount());
+                    for(int i=0;i<group.getChildCount();i++) {
+                        android.widget.TextView tag=(android.widget.TextView)group.getChildAt(i);
+                        assertTrue("Genre must stay inside its row",tag.getBottom()<=group.getHeight());
+                        assertTrue(tag.getRight()<=group.getWidth());
+                        assertEquals(group.getChildAt(0).getHeight(),tag.getHeight());
+                        assertTrue(tag.getHeight()>=tag.getLineHeight()+tag.getPaddingTop()+tag.getPaddingBottom());
+                    }
+                });
+                onView(withText("+2")).check(matches(isDisplayed()));
+                onView(withContentDescription("Cover for "+m.title)).check((view,error) -> {
+                    if(error!=null)throw error;
+                    android.view.ViewGroup upper=(android.view.ViewGroup)view.getParent();
+                    android.view.View identity=upper.getChildAt(1);
+                    assertEquals(view.getTop()+view.getHeight()/2f,identity.getTop()+identity.getHeight()/2f,1);
+                });
+            }
+        } finally {
+            if(m.id!=0)db().mediaDao().delete(m);
+            for(Long id:genreIds)db().genreDao().delete(id);
+        }
+    }
     @Test public void filtersCombineGroupsAndCancelDiscardsDraft() throws Exception {
         String prefix="Watlis filters "+UUID.randomUUID();
         WatlisRepository repo=new WatlisRepository(db());
