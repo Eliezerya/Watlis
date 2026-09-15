@@ -118,6 +118,9 @@ public class RepositoryInstrumentedTest {
         long id=media("Backup",9);MediaEntity m=repository.media(id);m.type=type.key;m.coverPositionY=.8f;m.coverZoom=2.25f;
         repository.saveMedia(m,repository.progress(id),Collections.emptyList());
         long recency=repository.progress(id).lastUpdatedAt;
+        CharacterEntity character=new CharacterEntity();character.mediaId=id;character.name="Guardian";
+        character.image="content://test/character-picture";character.description="Original description";
+        repository.saveCharacter(character);
         String backup=repository.exportToJson();
         repository.deleteMedia(m);repository.deleteMediaType(type.key,null);
         repository.importFromJson(backup);
@@ -126,6 +129,8 @@ public class RepositoryInstrumentedTest {
         assertEquals(.8f,repository.media(id).coverPositionY,0);
         assertEquals(2.25f,repository.media(id).coverZoom,0);
         assertEquals(recency,repository.progress(id).lastUpdatedAt);
+        assertEquals(character.image,repository.characters(id).get(0).image);
+        assertEquals(character.description,repository.characters(id).get(0).description);
         org.json.JSONObject broken=new org.json.JSONObject(backup);broken.remove("media");
         try {repository.importFromJson(broken.toString());fail("Invalid backup accepted");}
         catch(IllegalArgumentException expected) {}
@@ -134,10 +139,12 @@ public class RepositoryInstrumentedTest {
         org.json.JSONObject legacy=new org.json.JSONObject(backup);legacy.put("version",1);legacy.remove("mediaTypes");
         legacy.getJSONArray("media").getJSONObject(0).put("type","manga");
         legacy.getJSONArray("media").getJSONObject(0).remove("coverZoom");
+        legacy.getJSONArray("media").getJSONObject(0).getJSONArray("characters").getJSONObject(0).remove("image");
         repository.importFromJson(legacy.toString());
         assertEquals(4,repository.mediaTypes().size());
         assertEquals("manga",repository.media(id).type);
         assertEquals(1f,repository.media(id).coverZoom,0);
+        assertNull(repository.characters(id).get(0).image);
     }
     @Test public void coverPositionPersistsWithoutChangingProgressRecency() {
         long id=media("Cover",null);

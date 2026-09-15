@@ -28,8 +28,9 @@ public class MigrationInstrumentedTest {
             old.execSQL("INSERT INTO user_progress VALUES(1,12.5,8,'reading','Keep notes',12345)");
             old.execSQL("INSERT INTO genres VALUES(1,'Fantasy','#9CBFFF'),(2,'fantasy','#C3ACF1')");
             old.execSQL("INSERT INTO media_genres VALUES(1,2)");
+            old.execSQL("INSERT INTO characters VALUES(1,1,'Existing character','Ally','Keep description')");
             old.setVersion(1);old.close();
-            room=Room.databaseBuilder(context,WatlisDatabase.class,name).addMigrations(WatlisDatabase.MIGRATION_1_2,WatlisDatabase.MIGRATION_2_3,WatlisDatabase.MIGRATION_3_4,WatlisDatabase.MIGRATION_4_5).build();
+            room=Room.databaseBuilder(context,WatlisDatabase.class,name).addMigrations(WatlisDatabase.MIGRATION_1_2,WatlisDatabase.MIGRATION_2_3,WatlisDatabase.MIGRATION_3_4,WatlisDatabase.MIGRATION_4_5,WatlisDatabase.MIGRATION_5_6,WatlisDatabase.MIGRATION_6_7).build();
             assertEquals("Existing title",room.mediaDao().getById(1).title);
             assertEquals(0.5f,room.mediaDao().getById(1).coverPositionX,0);
             assertEquals(0.5f,room.mediaDao().getById(1).coverPositionY,0);
@@ -41,6 +42,9 @@ public class MigrationInstrumentedTest {
             assertEquals(4,room.mediaTypeDao().getAll().size());
             assertTrue(room.mediaTypeDao().get("anime").usesEpisodes);
             assertFalse(room.mediaTypeDao().get("manga").usesEpisodes);
+            assertEquals("Keep description",room.storyDao().characters(1).get(0).description);
+            assertNull(room.storyDao().characters(1).get(0).image);
+            assertTrue(room.progressHistoryDao().page(1,Long.MAX_VALUE,30).isEmpty());
         } finally {
             if(room!=null)room.close();
             context.deleteDatabase(name);

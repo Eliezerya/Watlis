@@ -117,6 +117,12 @@ public class WatlisRepository {
     }
 
     public long saveMedia(MediaEntity media, UserProgressEntity progress, List<Long> genreIds) {
+        return saveMedia(media, progress, genreIds, change -> {});
+    }
+
+    public long saveMedia(MediaEntity media, UserProgressEntity progress, List<Long> genreIds,
+                          java.util.function.Consumer<ProgressHistoryEntity> recorded) {
+        ProgressHistoryEntity[] change = {null};
         validateProgress(progress.currentProgress);
         if (!Float.isFinite(media.coverZoom) || media.coverZoom < 1 || media.coverZoom > 3)
             throw new IllegalArgumentException("Cover zoom must be between 1 and 3");
@@ -140,10 +146,14 @@ public class WatlisRepository {
             progress.lastUpdatedAt = previous == null || previous.currentProgress != progress.currentProgress
                     ? now : previous.lastUpdatedAt;
             db.progressDao().save(progress);
+            // Initial progress is a baseline, not a fabricated past reading session.
+            if (previous != null && previous.currentProgress != progress.currentProgress)
+                change[0] = recordProgress(previous, progress, "correction", null);
             db.genreDao().clearForMedia(media.id);
             for (Long genreId : genreIds) db.genreDao().addToMedia(new MediaGenreCrossRef(media.id, genreId));
         });
         refresh();
+        recorded.accept(change[0]);
         return media.id;
     }
 
@@ -151,17 +161,20 @@ public class WatlisRepository {
         if (!Double.isFinite(value) || value < 0) throw new IllegalArgumentException("Enter a valid nonnegative number");
     }
 
-    public void updateProgress(long id, double amount) {
+    public ProgressHistoryEntity updateProgress(long id, double amount) {
         validateProgress(amount);
-        db.runInTransaction(() -> writeProgress(id, amount));
+        ProgressHistoryEntity change = db.runInTransaction(() -> writeProgress(id, amount, "correction"));
         refreshProgress(id);
+        return change;
     }
-    public void incrementProgress(long id, double delta) {
-        db.runInTransaction(() -> {
+    public ProgressHistoryEntity incrementProgress(long id, double delta) {
+        if (!Double.isFinite(delta)) throw new IllegalArgumentException("Enter a valid change");
+        ProgressHistoryEntity change = db.runInTransaction(() -> {
             UserProgressEntity current = db.progressDao().get(id);
-            if (current != null) writeProgress(id, Math.max(0, current.currentProgress + delta));
+            return current == null ? null : writeProgress(id, Math.max(0, current.currentProgress + delta), delta > 0 ? "reading" : "correction");
         });
         refreshProgress(id);
+        return change;
     }
     private void refreshProgress(long id) {
         Snapshot previous = snapshot;
@@ -176,13 +189,50 @@ public class WatlisRepository {
         next.progress.put(id, db.progressDao().get(id));
         snapshot = next;
     }
-    private void writeProgress(long id, double amount) {
+    private ProgressHistoryEntity writeProgress(long id, double amount, String kind) {
         validateProgress(amount);
         UserProgressEntity p = db.progressDao().get(id);
-        if (p == null || p.currentProgress == amount) return;
+        if (p == null || p.currentProgress == amount) return null;
+        UserProgressEntity before = db.progressDao().get(id);
         p.currentProgress = amount;
         p.lastUpdatedAt = System.currentTimeMillis();
         db.progressDao().save(p);
+        return recordProgress(before, p, kind, null);
+    }
+
+    private ProgressHistoryEntity recordProgress(UserProgressEntity before, UserProgressEntity after, String kind, String undoOf) {
+        ProgressHistoryEntity change = new ProgressHistoryEntity();
+        change.mediaId = after.mediaId;
+        change.fromProgress = before.currentProgress; change.toProgress = after.currentProgress;
+        change.beforeUpdatedAt = before.lastUpdatedAt; change.afterUpdatedAt = after.lastUpdatedAt;
+        change.recordedAt = System.currentTimeMillis(); change.kind = kind; change.undoOf = undoOf;
+        MediaEntity media = db.mediaDao().getById(after.mediaId);
+        MediaTypeEntity type = media == null ? null : db.mediaTypeDao().get(media.type);
+        change.unit = type != null && type.usesEpisodes ? "Episode" : "Chapter";
+        change.id = db.progressHistoryDao().insert(change);
+        return change;
+    }
+
+    /** Indexed keyset paging: history is never included in the startup snapshot. */
+    public List<ProgressHistoryEntity> progressHistory(long mediaId, long beforeId, int limit) {
+        return db.progressHistoryDao().page(mediaId, beforeId, Math.max(1, Math.min(50, limit)));
+    }
+
+    public boolean undoProgress(long mediaId, String expectedToken) {
+        boolean undone = db.runInTransaction(() -> {
+            ProgressHistoryEntity latest = db.progressHistoryDao().latest(mediaId);
+            UserProgressEntity p = db.progressDao().get(mediaId);
+            if (latest == null || p == null || "undo".equals(latest.kind) || !latest.token.equals(expectedToken)
+                    || p.currentProgress != latest.toProgress || p.lastUpdatedAt != latest.afterUpdatedAt) return false;
+            UserProgressEntity before = db.progressDao().get(mediaId);
+            p.currentProgress = latest.fromProgress;
+            p.lastUpdatedAt = latest.beforeUpdatedAt;
+            db.progressDao().save(p);
+            recordProgress(before, p, "undo", latest.token);
+            return true;
+        });
+        refreshProgress(mediaId);
+        return undone;
     }
     public void favorite(long id) {
         db.runInTransaction(() -> {
@@ -252,9 +302,16 @@ public class WatlisRepository {
     }
 
     public String exportToJson() {
+        return db.runInTransaction(() -> {
+            refresh();
+            return exportSnapshotToJson();
+        });
+    }
+
+    private String exportSnapshotToJson() {
         try {
             org.json.JSONObject root = new org.json.JSONObject();
-            root.put("version", 3);
+            root.put("version", 5);
             org.json.JSONArray typeArray = new org.json.JSONArray();
             for (MediaTypeEntity type : snapshot.types) {
                 org.json.JSONObject value = new org.json.JSONObject();
@@ -307,9 +364,22 @@ public class WatlisRepository {
                     co.put("id", c.id); co.put("name", c.name);
                     if (c.role != null) co.put("role", c.role);
                     if (c.description != null) co.put("description", c.description);
+                    if (c.image != null) co.put("image", c.image);
+                    if (coverStore != null) co.put("imageThumbnail", coverStore.exportThumbnail(c.image));
                     chars.put(co);
                 }
                 o.put("characters", chars);
+                org.json.JSONArray history = new org.json.JSONArray();
+                for (ProgressHistoryEntity change : db.progressHistoryDao().forBackup(m.id)) {
+                    org.json.JSONObject entry = new org.json.JSONObject();
+                    entry.put("id", change.id); entry.put("token", change.token);
+                    entry.put("from", change.fromProgress); entry.put("to", change.toProgress);
+                    entry.put("recordedAt", change.recordedAt); entry.put("beforeUpdatedAt", change.beforeUpdatedAt);
+                    entry.put("afterUpdatedAt", change.afterUpdatedAt); entry.put("kind", change.kind);
+                    entry.put("unit", change.unit); if (change.undoOf != null) entry.put("undoOf", change.undoOf);
+                    history.put(entry);
+                }
+                o.put("progressHistory", history);
                 mediaArr.put(o);
             }
             root.put("media", mediaArr);
@@ -327,6 +397,7 @@ public class WatlisRepository {
         db.runInTransaction(() -> {
             try {
                 androidx.sqlite.db.SupportSQLiteDatabase sql = db.getOpenHelper().getWritableDatabase();
+                sql.execSQL("DELETE FROM progress_history");
                 sql.execSQL("DELETE FROM characters");
                 sql.execSQL("DELETE FROM story_memory");
                 sql.execSQL("DELETE FROM media_genres");
@@ -377,6 +448,7 @@ public class WatlisRepository {
                         org.json.JSONObject po = o.getJSONObject("progress");
                         UserProgressEntity p = new UserProgressEntity();
                         p.mediaId = m.id; p.currentProgress = po.optDouble("currentProgress", 0);
+                        validateProgress(p.currentProgress);
                         p.rating = po.has("rating") && !po.isNull("rating") ? po.getInt("rating") : null;
                         p.trackingStatus = po.optString("trackingStatus", "plan_to_read");
                         p.notes = nullStr(po, "notes"); p.lastUpdatedAt = po.optLong("lastUpdatedAt", 0);
@@ -404,8 +476,40 @@ public class WatlisRepository {
                             c.id = co.optLong("id", 0); c.mediaId = m.id;
                             c.name = co.getString("name"); c.role = nullStr(co, "role");
                             c.description = nullStr(co, "description");
+                            c.image = nullStr(co, "image");
+                            if (coverStore != null) coverStore.importThumbnail(c.image, nullStr(co, "imageThumbnail"));
                             db.storyDao().addCharacter(c);
                         }
+                    }
+                    org.json.JSONArray history = o.optJSONArray("progressHistory");
+                    ProgressHistoryEntity previous = null;
+                    if (history != null) for (int j = 0; j < history.length(); j++) {
+                        org.json.JSONObject entry = history.getJSONObject(j);
+                        ProgressHistoryEntity change = new ProgressHistoryEntity();
+                        change.id = entry.getLong("id"); change.mediaId = m.id; change.token = entry.getString("token");
+                        change.fromProgress = entry.getDouble("from"); change.toProgress = entry.getDouble("to");
+                        validateProgress(change.fromProgress); validateProgress(change.toProgress);
+                        change.recordedAt = entry.getLong("recordedAt");
+                        change.beforeUpdatedAt = entry.getLong("beforeUpdatedAt"); change.afterUpdatedAt = entry.getLong("afterUpdatedAt");
+                        change.kind = entry.getString("kind"); change.unit = entry.getString("unit"); change.undoOf = nullStr(entry, "undoOf");
+                        if (change.id <= 0 || change.token.isEmpty() || change.fromProgress == change.toProgress
+                                || change.recordedAt < 0 || change.beforeUpdatedAt < 0 || change.afterUpdatedAt < 0
+                                || !(change.unit.equals("Chapter") || change.unit.equals("Episode"))
+                                || !(change.kind.equals("reading") || change.kind.equals("correction") || change.kind.equals("undo"))
+                                || change.kind.equals("reading") && change.toProgress < change.fromProgress
+                                || change.kind.equals("undo") && (previous == null || previous.kind.equals("undo") || !previous.token.equals(change.undoOf)
+                                    || change.toProgress != previous.fromProgress || change.afterUpdatedAt != previous.beforeUpdatedAt)
+                                || !change.kind.equals("undo") && change.undoOf != null
+                                || previous != null && (change.id <= previous.id || change.fromProgress != previous.toProgress
+                                    || change.beforeUpdatedAt != previous.afterUpdatedAt))
+                            throw new IllegalArgumentException("Invalid progress history in backup");
+                        db.progressHistoryDao().insert(change);
+                        previous = change;
+                    }
+                    if (previous != null) {
+                        UserProgressEntity progress = db.progressDao().get(m.id);
+                        if (progress == null || progress.currentProgress != previous.toProgress || progress.lastUpdatedAt != previous.afterUpdatedAt)
+                            throw new IllegalArgumentException("Progress does not match backup history");
                     }
                 }
             } catch (org.json.JSONException e) {

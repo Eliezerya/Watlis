@@ -11,4 +11,5 @@ public class CharacterEntity {
     public String name = "";
     public String role;
     public String description;
+    public String image;
 }

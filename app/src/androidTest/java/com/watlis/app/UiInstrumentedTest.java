@@ -11,6 +11,7 @@ import java.util.function.BooleanSupplier;
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.Espresso.pressBack;
 import static androidx.test.espresso.action.ViewActions.click;
+import static androidx.test.espresso.action.ViewActions.longClick;
 import static androidx.test.espresso.action.ViewActions.scrollTo;
 import static androidx.test.espresso.action.ViewActions.replaceText;
 import static androidx.test.espresso.action.ViewActions.closeSoftKeyboard;
@@ -136,8 +137,8 @@ public class UiInstrumentedTest {
             onView(withText("+ Add")).perform(click());
             onView(withHint("Title")).perform(replaceText("Unsaved"),closeSoftKeyboard());
             pressBack();
-            onView(withText("Discard changes?")).check(matches(isDisplayed()));
-            onView(withText("Keep editing")).perform(click());
+            onView(withText("Keep your changes?")).check(matches(isDisplayed()));
+            pressBack();
             onView(withHint("Title")).check(matches(withText("Unsaved")));
             pressBack();onView(withText("Discard")).perform(click());
             onView(withText("My media")).check(matches(isDisplayed()));
@@ -216,6 +217,150 @@ public class UiInstrumentedTest {
             for(Long id:genreIds)db().genreDao().delete(id);
         }
     }
+    @Test public void noteExitKeepSavesDiscardPreservesAndUnchangedCloses() throws Exception {
+        WatlisRepository repo=new WatlisRepository(db());
+        MediaEntity m=new MediaEntity();m.title="Note decisions "+UUID.randomUUID();
+        repo.saveMedia(m,new UserProgressEntity(),Collections.emptyList());
+        try(ActivityScenario<MainActivity> scenario=ActivityScenario.launch(MainActivity.class)) {
+            waitHome();
+            onView(withContentDescription("Search your titles")).perform(replaceText(m.title),closeSoftKeyboard());
+            onView(withContentDescription("Cover for "+m.title)).perform(click());
+            onView(withText("+ Add story reminder")).perform(scrollTo(),click());
+            onView(withHint("Story reminder")).perform(replaceText("Remember the gate"),closeSoftKeyboard());
+            onView(withText("Cancel")).perform(click());
+            onView(withText("Keep")).perform(click());
+            await(() -> db().storyDao().get(m.id)!=null && "Remember the gate".equals(db().storyDao().get(m.id).storySummary));
+            onView(withContentDescription("Edit story reminder")).perform(scrollTo(),click());
+            onView(withHint("Story reminder")).perform(replaceText("Discard this replacement"),closeSoftKeyboard());
+            pressBack();
+            onView(withText("Discard")).perform(click());
+            assertEquals("Remember the gate",db().storyDao().get(m.id).storySummary);
+            onView(withContentDescription("Edit story reminder")).perform(scrollTo(),click());
+            onView(withText("Cancel")).perform(click());
+            onView(withText("Keep your changes?")).check(doesNotExist());
+            onView(withText("+ Add personal notes")).perform(scrollTo(),click());
+            onView(withHint("Personal notes")).perform(replaceText("Personal draft"),closeSoftKeyboard());
+            // Touch outside the dialog, but inside the app rather than the system status bar.
+            onView(isRoot()).perform(new androidx.test.espresso.ViewAction() {
+                public org.hamcrest.Matcher<android.view.View> getConstraints(){return isRoot();}
+                public String getDescription(){return "Tap outside the notes dialog";}
+                public void perform(androidx.test.espresso.UiController controller,android.view.View view) {
+                    int[] location=new int[2];view.getLocationOnScreen(location);
+                    long now=android.os.SystemClock.uptimeMillis();
+                    float y=location[1]+view.getHeight()/2f;
+                    android.view.MotionEvent down=android.view.MotionEvent.obtain(now,now,0,2,y,0);
+                    android.view.MotionEvent up=android.view.MotionEvent.obtain(now,now+50,1,2,y,0);
+                    try {controller.injectMotionEvent(down);controller.injectMotionEvent(up);}
+                    catch(androidx.test.espresso.InjectEventSecurityException e){throw new AssertionError(e);}
+                    finally {down.recycle();up.recycle();}
+                    controller.loopMainThreadUntilIdle();
+                }
+            });
+            onView(withText("Keep your changes?")).check(matches(isDisplayed()));
+            pressBack(); // Dismissing the decision itself resumes the unchanged draft.
+            onView(withHint("Personal notes")).check(matches(withText("Personal draft")));
+            onView(withText("Cancel")).perform(click());
+            onView(withText("Keep")).perform(click());
+            await(() -> "Personal draft".equals(db().progressDao().get(m.id).notes));
+        } finally {db().mediaDao().delete(m);}
+    }
+
+    @Test public void characterExitKeepValidatesAndSavesAllFieldsDiscardDropsNewDraft() throws Exception {
+        WatlisRepository repo=new WatlisRepository(db());
+        MediaEntity m=new MediaEntity();m.title="Character decisions "+UUID.randomUUID();
+        repo.saveMedia(m,new UserProgressEntity(),Collections.emptyList());
+        try(ActivityScenario<MainActivity> scenario=ActivityScenario.launch(MainActivity.class)) {
+            waitHome();
+            onView(withContentDescription("Search your titles")).perform(replaceText(m.title),closeSoftKeyboard());
+            onView(withContentDescription("Cover for "+m.title)).perform(click());
+            onView(withText("+ Add character")).perform(scrollTo(),click());
+            onView(withHint("Description")).perform(replaceText("Guards the gate"),closeSoftKeyboard());
+            onView(withText("Cancel")).perform(click());
+            onView(withText("Keep")).perform(click());
+            onView(withHint("Description")).check(matches(withText("Guards the gate")));
+            assertTrue(db().storyDao().characters(m.id).isEmpty());
+            onView(withHint("Name")).perform(replaceText("The guardian"),closeSoftKeyboard());
+            onView(withHint("Role")).perform(replaceText("Ally"),closeSoftKeyboard());
+            pressBack();onView(withText("Keep")).perform(click());
+            await(() -> db().storyDao().characters(m.id).size()==1);
+            CharacterEntity c=db().storyDao().characters(m.id).get(0);
+            assertEquals("The guardian",c.name);assertEquals("Ally",c.role);assertEquals("Guards the gate",c.description);
+            onView(withText("+ Add character")).perform(scrollTo(),click());
+            onView(withHint("Name")).perform(replaceText("Unwanted"),closeSoftKeyboard());
+            onView(withText("Cancel")).perform(click());onView(withText("Discard")).perform(click());
+            assertEquals(1,db().storyDao().characters(m.id).size());
+        } finally {db().mediaDao().delete(m);}
+    }
+
+    @Test public void characterEditorHasReadableSurfacesOutlinedFieldsAndComfortableActions() throws Exception {
+        WatlisRepository repo=new WatlisRepository(db());
+        MediaEntity m=new MediaEntity();m.title="Character form style "+UUID.randomUUID();
+        repo.saveMedia(m,new UserProgressEntity(),Collections.emptyList());
+        try(ActivityScenario<MainActivity> scenario=ActivityScenario.launch(MainActivity.class)) {
+            waitHome();
+            onView(withContentDescription("Search your titles")).perform(replaceText(m.title),closeSoftKeyboard());
+            onView(withContentDescription("Cover for "+m.title)).perform(click());
+            onView(withText("+ Add character")).perform(scrollTo(),click());
+            onView(withContentDescription("Character editor form")).check((view,error) -> {
+                if(error!=null)throw error;
+                assertNotEquals(android.graphics.Color.BLACK,((android.graphics.drawable.ColorDrawable)view.getBackground()).getColor());
+            });
+            for(String hint:new String[]{"Name","Role","Description"}) {
+                onView(withHint(hint)).perform(scrollTo()).check((view,error) -> {
+                    if(error!=null)throw error;
+                    android.widget.EditText input=(android.widget.EditText)view;
+                    android.view.ViewParent parent=view.getParent();
+                    while(!(parent instanceof com.google.android.material.textfield.TextInputLayout))parent=parent.getParent();
+                    com.google.android.material.textfield.TextInputLayout box=(com.google.android.material.textfield.TextInputLayout)parent;
+                    assertEquals(com.google.android.material.textfield.TextInputLayout.BOX_BACKGROUND_OUTLINE,box.getBoxBackgroundMode());
+                    assertTrue(androidx.core.graphics.ColorUtils.calculateContrast(input.getCurrentTextColor(),box.getBoxBackgroundColor())>=4.5);
+                    assertTrue(input.getTextSize()/view.getResources().getDisplayMetrics().scaledDensity>=16);
+                });
+            }
+            onView(withText("Save")).check((view,error) -> {
+                if(error!=null)throw error;
+                assertTrue(view.getHeight()>=48*view.getResources().getDisplayMetrics().density-1);
+            });
+            onView(withText("Add character image")).perform(scrollTo());
+            android.graphics.Bitmap shot=InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
+            if(shot!=null) {
+                java.io.File file=new java.io.File(InstrumentationRegistry.getInstrumentation().getTargetContext().getExternalFilesDir(null),"character-dialog-preview.png");
+                try(java.io.OutputStream output=new java.io.FileOutputStream(file)){shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,output);}
+                finally {shot.recycle();}
+            }
+            onView(withText("Cancel")).perform(click());
+            onView(withText("Keep your changes?")).check(doesNotExist());
+        } finally {db().mediaDao().delete(m);}
+    }
+
+    @Test public void detailTitleTapCopiesAndHoldEditsWithoutCopying() throws Exception {
+        WatlisRepository repo=new WatlisRepository(db());
+        MediaEntity m=new MediaEntity();m.title="Title: punctuation & spaces "+UUID.randomUUID();
+        repo.saveMedia(m,new UserProgressEntity(),Collections.emptyList());
+        try(ActivityScenario<MainActivity> scenario=ActivityScenario.launch(MainActivity.class)) {
+            waitHome();
+            onView(withContentDescription("Search your titles")).perform(replaceText(m.title),closeSoftKeyboard());
+            onView(withContentDescription("Cover for "+m.title)).perform(click());
+            onView(withText(m.title)).perform(click());
+            scenario.onActivity(activity -> {
+                android.content.ClipboardManager clipboard=(android.content.ClipboardManager)activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                assertNotNull(clipboard.getPrimaryClip());
+                assertEquals(m.title,clipboard.getPrimaryClip().getItemAt(0).getText().toString());
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Test","Not copied by hold"));
+            });
+            onView(withText(m.title)).perform(longClick());
+            onView(withHint("Title")).check(matches(withText(m.title)));
+            scenario.onActivity(activity -> {
+                android.content.ClipboardManager clipboard=(android.content.ClipboardManager)activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                assertEquals("Not copied by hold",clipboard.getPrimaryClip().getItemAt(0).getText().toString());
+            });
+            onView(withHint("Personal notes")).perform(scrollTo(),replaceText("Notes kept from media editor"),closeSoftKeyboard());
+            pressBack();onView(withText("Keep")).perform(click());
+            await(() -> "Notes kept from media editor".equals(db().progressDao().get(m.id).notes));
+            onView(withText(m.title)).check(matches(isDisplayed()));
+        } finally {db().mediaDao().delete(m);}
+    }
+
     @Test public void filtersCombineGroupsAndCancelDiscardsDraft() throws Exception {
         String prefix="Watlis filters "+UUID.randomUUID();
         WatlisRepository repo=new WatlisRepository(db());

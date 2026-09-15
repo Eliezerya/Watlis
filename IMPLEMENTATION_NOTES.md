@@ -6,7 +6,7 @@ The current `tsugi-design-handoff/` folder is empty. The written handoff was rec
 
 Implemented controls include search and clear, multi-select filters with draft/reset/apply behavior, removable filters, sorting in both directions, Home and Detail progress updates, cover picking and preview, media editing, focused story/rating/status/notes editors, character management, genre management, and statistics. Media drafts and list navigation state survive Activity recreation.
 
-Room access runs on the ViewModel executor. Quick progress writes use the current persisted value in a transaction, and metadata edits preserve progress recency. Schema version 5 retains the earlier migrations, adds normalized cover-position coordinates (v3), editable media types (v4), and 1x–3x cover zoom (v5, default 1x for existing media). Snapshot loading uses a fixed number of bulk queries instead of four queries per title.
+Room access runs on the ViewModel executor. Quick progress writes use the current persisted value in a transaction, and metadata edits preserve progress recency. Schema version 7 retains the earlier migrations, adds normalized cover-position coordinates (v3), editable media types (v4), 1x–3x cover zoom (v5, default 1x for existing media), an optional character image (v6), and progress history (v7). Snapshot loading uses a fixed number of bulk queries instead of four queries per title. History is not loaded into the startup snapshot.
 
 Media types are managed from the drawer or created inline in the media editor. Names are case-insensitively unique, with stable keys and a chapter/episode progress unit. Renames preserve associations; deleting an in-use type requires a replacement and preserves tracking, notes, covers, and genres. At least one type must remain. JSON backups include type definitions and cover positions and remain compatible with version-1 backups.
 
@@ -17,6 +17,20 @@ Detail cover taps open a full-screen, uncropped preview with pinch/pan, double-t
 List cards use vertically centered 56×80dp covers beside the title, score/type, and genres. Genre tags and the +N indicator have matching, font-aware heights, with wrapping rather than clipping. List cards and Detail accents follow the first alphabetically sorted genre, with contrast-adjusted accents for dark colors. The red adaptive book/bookmark launcher icon uses small vector resources and includes a monochrome variant.
 
 Detail typography distinguishes 18sp section headings, muted 11sp uppercase field labels, and 16sp reminder values (18sp for the main character). Genre color is reserved for small section markers and actions instead of coloring every heading. Reminder edit controls use an 18dp vector inside a 32dp visual surface while retaining 48dp touch targets. Expansion and personal-note editing use quiet text actions, with no empty expansion row for short values. Reminder editing and expansion have a dedicated UI regression test.
+
+Detail title taps copy the complete title through Android's clipboard; holding the title opens the existing media editor and consumes the gesture without copying. The title retains a 48dp minimum touch target and labeled accessibility actions.
+
+Changed character, description, story-memory, and personal-note dialogs ask **Discard / Keep** when dismissed with Cancel, system Back, or an outside tap. Keep invokes the normal validated save without needing the editor's Save button; Discard drops the unsaved draft while preserving previously saved data. Dismissing the decision itself resumes editing. Unchanged dialogs close directly. Character names remain required, and dialogs stay open until the write succeeds. The full media editor uses the same decision, with Keep saving all form fields including personal notes. No new runtime dependencies or database migration were required.
+
+Characters support an optional device photo in Add/Edit character, with Change and Remove controls and a compact 64x88dp thumbnail. Tapping either the selected photo or the saved character photo opens the existing full-screen zoom/pan/fit viewer. The same app-private thumbnail store keeps a bounded offline copy; original decoding occurs only for explicit previews or first-time thumbnail preparation. Saving waits for the copy and retains the draft if the selected image cannot be read. Photo changes participate in Keep/Discard, and character form fields plus the photo selection survive Activity recreation. Removing a photo changes only the character association, not the original device file. JSON version-4 backups include character image references and saved thumbnails; older backups import with no character photo. The additive v5-to-v6 database migration preserves existing character names, roles, descriptions, and media associations. No runtime dependencies were added.
+
+The character editor uses one charcoal dialog surface, brighter outlined input boxes with 16sp text, a small vector person placeholder, genre-accent photo controls, and a filled Save button. Its scroll content no longer forces pure black or covers the dialog's outline. These changes are local to Add/Edit character. The native input underline is removed so Material can draw the intended outline.
+
+Progress history records future changes only; initial progress and existing data remain a baseline. Plus taps create reading updates, while decreases, manual entry, and progress edits in the media form create corrections. Unchanged values and metadata-only edits do not create entries. Progress and history are committed in the same Room transaction. Each entry stores before/after values, event time, previous/resulting reading timestamps, a unit snapshot, and a unique token. Undo verifies the latest token and current persisted state for that title, restores progress and its prior reading timestamp, and appends an Undo entry. A stale or repeated Undo is refused; Undo entries cannot themselves be undone. Changes to another title do not invalidate this title's latest action.
+
+List and Detail display one reusable six-second Undo message, updated in place for rapid taps and identifying the title. Detail's History action opens recycled text rows with indexed keyset paging (30 records per page). Its latest-change action also works after reopening the app. No new history is inferred for legacy imports. JSON version-5 backups preserve history and Undo records; inconsistent history is rejected within the import transaction. Export reads progress/history in one database transaction for consistency. The v6-to-v7 migration adds only the history table and indexes; deleting media cascades to its history.
+
+Other future feature proposals are documented in `FEATURE_BLUEPRINT.md`; only its Progress history + Undo feature is implemented.
 
 ## Build
 
@@ -32,7 +46,32 @@ $adb = 'C:/Users/andel/AppData/Local/Android/Sdk/platform-tools/adb.exe'
 & $adb shell am instrument -w com.watlis.app.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-Verified on September 10, 2026:
+Verified on September 15, 2026 for Progress history + Undo:
+
+- Debug APK, Android test APK, local unit tests, and lint tasks passed. Lint reports zero errors and the same 42 warnings as before this feature.
+- All 34 instrumentation tests passed on Pixel 7 / Android 15. Eight new repository tests cover fractional/rapid updates, no-op changes, recency restoration, stale Undo at an identical progress value, metadata exclusion, transaction rollback on history-insert failure, bounded keyset pagination, unit snapshots, history backup validation/legacy import, persistent Undo after database reopening, and concurrent updates/Undo. Two new UI tests cover List/Detail/editor Undo, reopening History, the empty state, and scrolling through 85 entries in 30-record pages.
+- Both history UI tests also passed at 320dp width with font scale 1.3. Visually inspected History at normal and enlarged text sizes; restored the emulator to its original size and font scale afterward.
+- Upgraded and installed in place without clearing the user's collection. Existing migration coverage verifies that legacy progress and characters survive with an empty history table. No new runtime dependencies were introduced. Startup history loading is avoided by design; no new startup-time or memory benchmark was performed for this feature.
+
+Earlier verification on September 15, 2026 for character-editor contrast and spacing:
+
+- Debug/app-test APK builds, local unit tests, and lint tasks passed; lint reports zero errors and 42 warnings.
+- Three targeted instrumentation tests passed: character form surfaces/field contrast/action sizing, character Keep/Discard/validation, and the full character-photo picker/rotation/preview/fallback/backup/removal flow.
+- Visually inspected the normal-size character dialog, including the filled Save button. The full suite and enlarged-text layout were not rerun for this polish.
+
+Earlier verification on September 14, 2026 for character images:
+
+- Debug APK, Android test APK, local unit tests, and lint tasks passed. Lint reports zero errors and 42 warnings.
+- All 23 instrumentation tests passed on Pixel 7 / Android 15. The new end-to-end test uses the real system document picker and verifies photo selection, persistable access, character draft recreation, Keep saving, original-resolution preview, zoom/fit, missing-original fallback, thumbnail backup restoration in an isolated database, and image-only Keep/Discard/removal while preserving descriptions. Migration and legacy-backup tests also cover the optional image field.
+- APKs were installed in place without clearing the existing collection. Real-device and alternate photo-provider behavior remain outside this emulator verification.
+
+Earlier verification on September 14, 2026 for the note-exit and title-gesture changes:
+
+- Debug APK, Android test APK, local unit tests, and lint tasks passed. Lint still reports zero errors and 44 warnings.
+- All 22 instrumentation tests passed on Pixel 7 / Android 15, including three new UI regressions for Keep/Discard, unchanged dismissal, system Back, outside-tap dismissal, resuming a draft, required character names, character descriptions/roles, full-form personal-note saving, title copying, and hold-to-edit without copying.
+- Installed both APKs in place without uninstalling the existing app. Tests remove only their own temporary collection fixtures.
+
+Earlier checks from September 10, 2026:
 
 - Debug APK build and local unit test task passed.
 - Lint: zero errors; 44 warnings remain, including dependency-version suggestions, unused starter resources, text localization, and accessibility warnings.

@@ -30,6 +30,7 @@ import com.watlis.app.data.MediaEntity;
 import com.watlis.app.data.MediaTypeEntity;
 import com.watlis.app.data.StoryMemoryEntity;
 import com.watlis.app.data.UserProgressEntity;
+import com.watlis.app.data.ProgressHistoryEntity;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -43,6 +44,10 @@ public class MainActivity extends AppCompatActivity {
     private WatlisViewModel viewModel;
     private LinearLayout content;
     private ActivityResultLauncher<String[]> imagePicker;
+    private ActivityResultLauncher<String[]> characterImagePicker;
+    private Bundle characterDraft;
+    private TextInputEditText[] characterFields;
+    private androidx.appcompat.app.AlertDialog characterDialog;
     private ActivityResultLauncher<String> exportPicker;
     private ActivityResultLauncher<String[]> importPicker;
     private String selectedImageUri;
@@ -50,6 +55,7 @@ public class MainActivity extends AppCompatActivity {
     private float editorCoverX = 0.5f, editorCoverY = 0.5f;
     private float editorCoverZoom = 1f;
     private boolean editorSaving;
+    private ProgressUndoBar progressUndoBar;
     private TextView editorSaveButton;
     private TextView editorPositionSummary;
     private long selectedGenreFilter = -1;
@@ -88,6 +94,16 @@ public class MainActivity extends AppCompatActivity {
                 getContentResolver().takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 pendingPickedCover = uri.toString();
                 if (screen.equals("editor") && editorCover != null) applyPickedCover();
+            } catch (SecurityException error) {
+                toast("Unable to keep access to this image. Choose another file.");
+            }
+        });
+        characterImagePicker = registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
+            if (uri == null || characterDraft == null) return;
+            try {
+                getContentResolver().takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                characterDraft.putString("image", uri.toString());
+                if (characterFields != null) characterFields[3].setText(uri.toString());
             } catch (SecurityException error) {
                 toast("Unable to keep access to this image. Choose another file.");
             }
@@ -146,6 +162,7 @@ public class MainActivity extends AppCompatActivity {
             editingId = savedInstanceState.getLong("editing", 0) == 0 ? null : savedInstanceState.getLong("editing");
             formDraft = savedInstanceState.getBundle("draft");
             formBaseline = savedInstanceState.getString("baseline");
+            characterDraft = savedInstanceState.getBundle("characterDraft");
         }
         getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
             @Override
@@ -180,6 +197,14 @@ public class MainActivity extends AppCompatActivity {
                 default:
                     showHome();
             }
+            if (characterDraft != null) {
+                long mediaId = characterDraft.getLong("mediaId"), characterId = characterDraft.getLong("id");
+                CharacterEntity existing = null;
+                for (CharacterEntity c : viewModel.repository.characters(mediaId)) if (c.id == characterId) existing = c;
+                if (viewModel.repository.media(mediaId) != null && (characterId == 0 || existing != null))
+                    showCharacterDialog(mediaId, existing);
+                else characterDraft = null;
+            }
         });
     }
 
@@ -200,6 +225,8 @@ public class MainActivity extends AppCompatActivity {
         out.putLong("editing", editingId == null ? 0 : editingId);
         if (screen.equals("editor")) out.putBundle("draft", captureDraft());
         out.putString("baseline", formBaseline);
+        captureCharacterDraft();
+        if (characterDraft != null) out.putBundle("characterDraft", new Bundle(characterDraft));
         super.onSaveInstanceState(out);
     }
 
@@ -637,9 +664,32 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void changeProgress(long id, double value) {
-        write(() -> viewModel.repository.updateProgress(id, value), () -> {
+        ProgressHistoryEntity[] change = {null};
+        write(() -> change[0] = viewModel.repository.updateProgress(id, value), () -> {
             if (screen.equals("detail") && detailId == id) showDetail(id);
             else loadHome();
+            offerProgressUndo(change[0]);
+        });
+    }
+
+    private void offerProgressUndo(ProgressHistoryEntity change) {
+        if (change == null || !(screen.equals("home") || screen.equals("detail") && detailId == change.mediaId)) return;
+        MediaEntity changedMedia = viewModel.repository.media(change.mediaId);
+        if (changedMedia == null) return;
+        // Reuse the visible bar during rapid taps so its action always matches its latest label.
+        if (progressUndoBar == null || !progressUndoBar.isShownOrQueued())
+            progressUndoBar = new ProgressUndoBar(findViewById(android.R.id.content));
+        progressUndoBar.update(getString(R.string.history_progress, change.unit, number(change.fromProgress), number(change.toProgress)),
+                changedMedia.title, mediaAccent(changedMedia), () -> undoProgress(change));
+    }
+
+    private void undoProgress(ProgressHistoryEntity change) {
+        boolean[] undone = {false};
+        write(() -> undone[0] = viewModel.repository.undoProgress(change.mediaId, change.token), () -> {
+            if (screen.equals("detail") && detailId == change.mediaId) showDetail(change.mediaId);
+            else if (screen.equals("home")) loadHome();
+            else if (screen.equals("stats")) showStats();
+            toast(undone[0] ? "Progress change undone" : "A newer change exists or this change was already undone. Nothing changed.");
         });
     }
 
@@ -649,6 +699,25 @@ public class MainActivity extends AppCompatActivity {
 
     private void mediaMenu(View anchor, MediaEntity m) {
         PopupMenu menu = new PopupMenu(this, anchor);
+        if (screen.equals("stats")) {
+            android.view.MenuItem undo = menu.getMenu().add(R.string.history_undo_latest).setEnabled(false);
+            // One indexed row, fetched only when opening this menu; never on the startup path.
+            viewModel.executor.execute(() -> {
+                try {
+                    List<ProgressHistoryEntity> latest = viewModel.repository.progressHistory(m.id, Long.MAX_VALUE, 1);
+                    ProgressHistoryEntity change = latest.isEmpty() ? null : latest.get(0);
+                    runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed() || !anchor.isAttachedToWindow()) return;
+                        if (change != null && !"undo".equals(change.kind)) {
+                            undo.setEnabled(true);
+                            undo.setOnMenuItemClickListener(item -> { undoProgress(change); return true; });
+                        }
+                    });
+                } catch (Exception error) {
+                    android.util.Log.e("Watlis", "Could not load latest progress change", error);
+                }
+            });
+        }
         menu.getMenu().add(m.isFavorite ? "Unfavorite" : "Favorite");
         menu.getMenu().add("Edit media");
         menu.getMenu().add("Delete media");
@@ -876,6 +945,19 @@ public class MainActivity extends AppCompatActivity {
         TextView name = title(m.title);
         name.setTextSize(24);
         name.setLineSpacing(dp(2), 1.05f);
+        name.setMinHeight(dp(48));
+        name.setContentDescription(m.title + ". Tap to copy title; hold to edit media.");
+        name.setOnClickListener(v -> {
+            android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (clipboard != null) clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Media title", m.title));
+        });
+        name.setOnLongClickListener(v -> { showEditor(id); return true; });
+        androidx.core.view.ViewCompat.replaceAccessibilityAction(name,
+                androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CLICK,
+                "Copy title", (view, arguments) -> { name.performClick(); return true; });
+        androidx.core.view.ViewCompat.replaceAccessibilityAction(name,
+                androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_LONG_CLICK,
+                "Edit media", (view, arguments) -> { showEditor(id); return true; });
         add(identity, name, 0, 8);
         add(identity, muted(typeName(m.type) + " · " + cap(m.releaseStatus)), 0, 8);
         LinearLayout actions = new LinearLayout(this);
@@ -914,7 +996,16 @@ public class MainActivity extends AppCompatActivity {
             tags.addView(target);
         }
         add(page, tags, 0, 24);
-        add(page, sectionTitle("Your progress"), 0, 12);
+        LinearLayout progressHeading = new LinearLayout(this);
+        progressHeading.setGravity(Gravity.CENTER_VERTICAL);
+        progressHeading.addView(sectionTitle("Your progress"), lp(0, -2, 1));
+        TextView history = detailTextAction("History", accent, v -> {
+            if (progressUndoBar != null) progressUndoBar.dismiss();
+            ProgressHistoryDialog.show(this, viewModel.repository, viewModel.executor, id, m.title, accent, this::undoProgress);
+        });
+        history.setContentDescription("Show progress history");
+        progressHeading.addView(history, lp(-2, -2));
+        add(page, progressHeading, 0, 8);
         add(page, progressControls(m, p), 0, 8);
         LinearLayout tracking = new LinearLayout(this);
         tracking.addView(action(statusLabel(p.trackingStatus, m.type), v -> editTracking(m, p)), lp(0, -2, 1));
@@ -946,8 +1037,10 @@ public class MainActivity extends AppCompatActivity {
             add(page, notes, 0, 4);
         }
         TextView notesAction = detailTextAction(p.notes == null || p.notes.isEmpty() ? "+ Add personal notes" : "Edit personal notes", accent, v ->
-                editTextDialog("Personal notes", p.notes, true, value ->
-                        write(() -> viewModel.repository.updateTracking(id, p.trackingStatus, p.rating, value), () -> showDetail(id))));
+                editTextDialog("Personal notes", p.notes, true, (value, saved, failed) ->
+                        write(() -> viewModel.repository.updateTracking(id, p.trackingStatus, p.rating, value), () -> {
+                            saved.run(); showDetail(id);
+                        }, failed)));
         page.addView(notesAction, lp(-2, -2));
         margin(notesAction, 0, 0, 0, 24);
         add(page, action("Edit media", v -> showEditor(id)), 0, 24);
@@ -982,10 +1075,18 @@ public class MainActivity extends AppCompatActivity {
         row.setPadding(dp(16), dp(12), dp(12), dp(16));
         row.setBackground(bg(SURFACE, 14));
         LinearLayout top = new LinearLayout(this);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        if (c.image != null && !c.image.isEmpty()) {
+            View photo = coverView(c.image, c.name, 64, 88, .5f, .5f, 1f);
+            photo.setContentDescription("Preview character image for " + c.name);
+            photo.setOnClickListener(v -> showFullImage(c.name, c.image, true));
+            top.addView(photo, lp(dp(64), dp(88)));
+            margin(photo, 0, 0, 12, 0);
+        }
         TextView name = label(c.name, 16, TEXT);
         name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         top.addView(name, lp(0, -2, 1));
-        top.addView(action("⋮", v -> {
+        TextView characterMenu = action("⋮", v -> {
             PopupMenu menu = new PopupMenu(this, v);
             menu.getMenu().add("Edit");
             menu.getMenu().add("Delete");
@@ -998,7 +1099,9 @@ public class MainActivity extends AppCompatActivity {
                 return true;
             });
             menu.show();
-        }), lp(dp(48), dp(48)));
+        });
+        characterMenu.setContentDescription("Character options for " + c.name);
+        top.addView(characterMenu, lp(dp(48), dp(48)));
         row.addView(top);
         if (c.role != null && !c.role.isEmpty()) add(row, muted(c.role), 0, 4);
         if (c.description != null && !c.description.isEmpty()) {
@@ -1010,14 +1113,87 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showCharacterDialog(long id, CharacterEntity existing) {
+        int panelColor = Color.rgb(30, 37, 32);
+        int accent = mediaAccent(viewModel.repository.media(id));
+        Bundle restored = characterDraft;
+        characterDraft = new Bundle();
+        characterDraft.putLong("mediaId", id);
+        characterDraft.putLong("id", existing == null ? 0 : existing.id);
         LinearLayout form = dialogForm();
-        TextInputEditText name = field(form, "Name", existing == null ? "" : existing.name, false);
-        TextInputEditText role = field(form, "Role", existing == null ? "" : existing.role, false);
-        TextInputEditText description = field(form, "Description", existing == null ? "" : existing.description, true);
+        form.setPadding(dp(24), dp(16), dp(24), dp(8));
+        form.setBackgroundColor(panelColor);
+        form.setContentDescription("Character editor form");
+        LinearLayout photoRow = new LinearLayout(this);
+        photoRow.setGravity(Gravity.CENTER_VERTICAL);
+        android.widget.FrameLayout photoFrame = new android.widget.FrameLayout(this);
+        photoRow.addView(photoFrame, lp(dp(64), dp(88)));
+        margin(photoFrame, 0, 0, 12, 0);
+        LinearLayout photoActions = new LinearLayout(this);
+        photoActions.setOrientation(LinearLayout.VERTICAL);
+        TextView choose = action("Add character image", v -> {
+            captureCharacterDraft();
+            characterImagePicker.launch(new String[]{"image/*"});
+        });
+        choose.setTextSize(14);
+        choose.setTextColor(accent);
+        choose.setBackground(new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(tint(panelColor, accent, .22f)),
+                outlined(Color.rgb(40, 49, 43), tint(BORDER, accent, .28f), 12), null));
+        add(photoActions, choose, 0, 8);
+        TextInputEditText imageSource = new TextInputEditText(this);
+        imageSource.setText(existing == null ? "" : existing.image);
+        TextView remove = detailTextAction("Remove image", DANGER, v -> imageSource.setText(""));
+        photoActions.addView(remove, lp(-1, -2));
+        photoRow.addView(photoActions, lp(0, -2, 1));
+        add(form, photoRow, 0, 16);
+        TextInputEditText name = characterField(form, "Name", existing == null ? "" : existing.name, false, accent);
+        TextInputEditText role = characterField(form, "Role", existing == null ? "" : existing.role, false, accent);
+        TextInputEditText description = characterField(form, "Description", existing == null ? "" : existing.description, true, accent);
+        characterFields = new TextInputEditText[]{name, role, description, imageSource};
+        Runnable updatePhoto = () -> {
+            String source = text(imageSource);
+            photoFrame.removeAllViews();
+            View photo = coverView(source, "Character image", 64, 88, .5f, .5f, 1f);
+            if (source.isEmpty()) {
+                android.widget.ImageView placeholder = new androidx.appcompat.widget.AppCompatImageView(this);
+                placeholder.setImageResource(R.drawable.ic_character_placeholder);
+                placeholder.setScaleType(android.widget.ImageView.ScaleType.CENTER_INSIDE);
+                photo = placeholder;
+            }
+            photo.setBackground(outlined(Color.rgb(40, 49, 43), Color.rgb(76, 91, 80), 12));
+            photo.setClipToOutline(true);
+            photo.setContentDescription(source.isEmpty() ? "No character image" : "Preview selected character image");
+            if (!source.isEmpty()) photo.setOnClickListener(v -> showFullImage(text(name), source, true));
+            photoFrame.addView(photo, new android.widget.FrameLayout.LayoutParams(-1, -1));
+            choose.setText(source.isEmpty() ? "Add character image" : "Change character image");
+            remove.setVisibility(source.isEmpty() ? View.GONE : View.VISIBLE);
+            margin(choose, 0, 0, 0, source.isEmpty() ? 0 : 4);
+        };
+        imageSource.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            public void onTextChanged(CharSequence s, int start, int before, int count) { updatePhoto.run(); }
+            public void afterTextChanged(android.text.Editable s) {}
+        });
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.setPadding(dp(24), dp(24), dp(24), 0);
+        TextView heading = label(existing == null ? "Add character" : "Edit character", 22, TEXT);
+        heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        androidx.core.view.ViewCompat.setAccessibilityHeading(heading, true);
+        add(header, heading, 0, 6);
+        TextView hint = label("A face and a few details to remember.", 13, Color.rgb(188, 199, 191));
+        add(header, hint, 0, 0);
+        ScrollView formScroll = scroll(form);
+        formScroll.setFillViewport(false);
+        formScroll.setBackgroundColor(Color.TRANSPARENT);
+        formScroll.setPadding(dp(1), 0, dp(1), 0);
         androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(this)
-                .setTitle(existing == null ? "Add character" : "Edit character").setView(scroll(form))
+                .setBackground(outlined(panelColor, tint(BORDER, accent, .18f), 24))
+                .setCustomTitle(header).setView(formScroll)
                 .setNegativeButton("Cancel", null).setPositiveButton("Save", null).create();
-        dialog.setOnShowListener(d -> dialog.getButton(-1).setOnClickListener(v -> {
+        boolean[] saving = {false};
+        Runnable save = () -> {
+            if (saving[0]) return;
             if (text(name).isEmpty()) {
                 name.setError("Name is required");
                 name.requestFocus();
@@ -1029,17 +1205,91 @@ public class MainActivity extends AppCompatActivity {
             c.name = text(name);
             c.role = text(role);
             c.description = text(description);
-            write(() -> viewModel.repository.saveCharacter(c), () -> {
-                dialog.dismiss();
-                showDetail(id);
+            c.image = text(imageSource).isEmpty() ? null : text(imageSource);
+            saving[0] = true;
+            dialog.getButton(-1).setEnabled(false);
+            choose.setEnabled(false); remove.setEnabled(false);
+            Runnable failed = () -> {
+                saving[0] = false; dialog.getButton(-1).setEnabled(true);
+                choose.setEnabled(true); remove.setEnabled(true);
+            };
+            CoverStore.get(this).ensure(c.image, file -> {
+                if (isDestroyed() || isFinishing()) return;
+                if (c.image != null && file == null) {
+                    failed.run();
+                    toast("Image could not be saved. Choose another image or remove it and try again.");
+                    return;
+                }
+                write(() -> viewModel.repository.saveCharacter(c), () -> {
+                    dialog.dismiss();
+                    showDetail(id);
+                }, failed);
             });
-        }));
+        };
+        protectNoteDraft(dialog, Arrays.asList(characterFields), save, () -> saving[0]);
+        if (restored != null) {
+            String[] keys = {"name", "role", "description", "image"};
+            for (int i = 0; i < keys.length; i++) characterFields[i].setText(restored.getString(keys[i], ""));
+        }
+        updatePhoto.run();
+        characterDialog = dialog;
+        dialog.setOnDismissListener(d -> {
+            // Outside-tap cancellation re-shows the editor beneath Keep / Discard.
+            if (!dialog.isShowing() && characterDialog == dialog) {
+                characterDraft = null; characterFields = null; characterDialog = null;
+            }
+        });
         dialog.show();
+        android.widget.Button saveButton = dialog.getButton(-1), cancelButton = dialog.getButton(-2);
+        saveButton.setTextColor(readable(accent));
+        saveButton.setBackground(new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(tint(accent, Color.WHITE, .2f)), bg(accent, 12), null));
+        androidx.core.view.ViewCompat.setBackgroundTintList(saveButton, android.content.res.ColorStateList.valueOf(accent));
+        saveButton.setMinHeight(dp(48)); saveButton.setMinimumWidth(dp(88));
+        saveButton.setPadding(dp(20), dp(8), dp(20), dp(8));
+        margin(saveButton, 12, 0, 0, 0);
+        cancelButton.setTextColor(TEXT);
+        cancelButton.setMinHeight(dp(48));
+    }
+
+    private TextInputEditText characterField(LinearLayout form, String hint, String value, boolean multi, int accent) {
+        TextInputLayout box = new TextInputLayout(this, null, com.google.android.material.R.attr.textInputOutlinedStyle);
+        box.setHint(hint);
+        box.setBoxBackgroundMode(TextInputLayout.BOX_BACKGROUND_OUTLINE);
+        box.setBoxCornerRadii(dp(12), dp(12), dp(12), dp(12));
+        box.setBoxBackgroundColor(Color.rgb(40, 49, 43));
+        box.setBoxStrokeColorStateList(new android.content.res.ColorStateList(
+                new int[][]{new int[]{android.R.attr.state_focused}, new int[]{}},
+                new int[]{accent, Color.rgb(99, 115, 104)}));
+        box.setDefaultHintTextColor(android.content.res.ColorStateList.valueOf(Color.rgb(199, 209, 201)));
+        box.setHintTextColor(android.content.res.ColorStateList.valueOf(accent));
+        TextInputEditText input = new TextInputEditText(box.getContext());
+        // Remove the Activity theme's native underline so the Material outline is actually drawn.
+        input.setBackground(null);
+        input.setText(value == null ? "" : value);
+        input.setTextColor(TEXT);
+        input.setTextSize(16);
+        input.setPadding(dp(14), dp(16), dp(14), dp(16));
+        input.setSingleLine(!multi);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | (multi ? InputType.TYPE_TEXT_FLAG_MULTI_LINE : InputType.TYPE_TEXT_FLAG_CAP_SENTENCES));
+        if (multi) { input.setMinLines(3); input.setGravity(Gravity.TOP | Gravity.START); }
+        input.setMinHeight(dp(multi ? 108 : 56));
+        box.addView(input, lp(-1, -2));
+        add(form, box, 0, 16);
+        return input;
+    }
+
+    private void captureCharacterDraft() {
+        if (characterDraft == null || characterFields == null) return;
+        String[] keys = {"name", "role", "description", "image"};
+        for (int i = 0; i < keys.length; i++)
+            characterDraft.putString(keys[i], characterFields[i].getText() == null ? "" : characterFields[i].getText().toString());
     }
 
     private void showProgressDialog(MediaEntity m, UserProgressEntity p) {
         LinearLayout form = dialogForm();
         TextInputEditText input = field(form, unit(m), number(p.currentProgress), false);
+        add(form, muted("Manual changes are recorded as corrections."), 0, 4);
         input.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
         input.selectAll();
         androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(this).setTitle("Update progress")
@@ -1189,7 +1439,9 @@ public class MainActivity extends AppCompatActivity {
             add(text, name, 0, 4);
             add(text, muted(formatProgress(m, p) + " · " + date(p.lastUpdatedAt)), 0, 12);
             row.addView(text, lp(0, -2, 1));
-            row.addView(action("⋮", v -> mediaMenu(v, m)), lp(dp(48), dp(48)));
+            TextView more = action("⋮", v -> mediaMenu(v, m));
+            more.setContentDescription("More actions for " + m.title);
+            row.addView(more, lp(dp(48), dp(48)));
             add(page, row, 0, 8);
         }
         if (media.isEmpty()) add(page, muted("Your recent titles will appear here."), 0, 0);
@@ -1641,6 +1893,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void install(LinearLayout root) {
+        if (progressUndoBar != null) { progressUndoBar.dismiss(); progressUndoBar = null; }
         drawer = new androidx.drawerlayout.widget.DrawerLayout(this);
         drawer.setBackgroundColor(BG);
         drawer.addView(root, new androidx.drawerlayout.widget.DrawerLayout.LayoutParams(-1, -1));
@@ -1669,6 +1922,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void write(Runnable operation, Runnable success) {
+        write(operation, success, null);
+    }
+
+    private void write(Runnable operation, Runnable success, Runnable failure) {
         viewModel.executor.execute(() -> {
             try {
                 operation.run();
@@ -1683,6 +1940,7 @@ public class MainActivity extends AppCompatActivity {
                 }
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
+                    if (failure != null) failure.run();
                     if (screen.equals("editor") && editorSaveButton != null) {
                         editorSaving = false;
                         editorSaveButton.setEnabled(true);
@@ -1691,7 +1949,7 @@ public class MainActivity extends AppCompatActivity {
                     if (!screen.equals("editor")) refreshScreen();
                     new MaterialAlertDialogBuilder(this).setTitle("Could not save changes")
                             .setMessage("Your change was not saved. " + (error instanceof IllegalArgumentException ? error.getMessage() : "Please try again."))
-                            .setNegativeButton("Close", null).setPositiveButton("Retry", (d, w) -> write(operation, success)).show();
+                            .setNegativeButton("Close", null).setPositiveButton("Retry", (d, w) -> write(operation, success, failure)).show();
                 });
             }
         });
@@ -1722,9 +1980,10 @@ public class MainActivity extends AppCompatActivity {
                 else showHome();
             };
             if (!draftKey(captureDraft()).equals(formBaseline))
-                new MaterialAlertDialogBuilder(this).setTitle("Discard changes?")
-                        .setMessage("Your unsaved media changes will be lost.")
-                        .setNegativeButton("Keep editing", null).setPositiveButton("Discard", (d, w) -> discard.run()).show();
+                new MaterialAlertDialogBuilder(this).setTitle("Keep your changes?")
+                        .setMessage("Keep saves this media form, including your notes. Discard removes only unsaved changes.")
+                        .setNegativeButton("Discard", (d, w) -> discard.run())
+                        .setPositiveButton("Keep", (d, w) -> saveEditor(editingId == null ? null : viewModel.repository.media(editingId))).show();
             else discard.run();
         } else if (screen.equals("detail") && detailOrigin.equals("stats")) showStats();
         else showHome();
@@ -1832,13 +2091,15 @@ public class MainActivity extends AppCompatActivity {
             value.announceForAccessibility(value.getText());
             minus.setEnabled(shown[0] > 0);
             minus.setAlpha(shown[0] > 0 ? 1f : .35f);
-            write(() -> viewModel.repository.incrementProgress(m.id, delta), () -> {
+            ProgressHistoryEntity[] change = {null};
+            write(() -> change[0] = viewModel.repository.incrementProgress(m.id, delta), () -> {
                 // Keep the touched control in place while rapid taps are queued.
                 UserProgressEntity latest = viewModel.repository.progress(m.id);
                 p.currentProgress = latest.currentProgress;
                 p.lastUpdatedAt = latest.lastUpdatedAt;
                 if (screen.equals("detail") && detailId == m.id && detailUpdatedLabel != null)
                     detailUpdatedLabel.setText("Updated " + date(latest.lastUpdatedAt));
+                offerProgressUndo(change[0]);
             });
         };
         minus.setOnClickListener(v -> update.accept(-1d));
@@ -1983,6 +2244,10 @@ public class MainActivity extends AppCompatActivity {
     private String zoomSummary(float zoom) { return "Zoom · " + Math.round(zoom * 100) + "%"; }
 
     private void showFullCover(MediaEntity media) {
+        showFullImage(media.title, media.coverImage, false);
+    }
+
+    private void showFullImage(String imageTitle, String source, boolean character) {
         android.app.Dialog dialog = new android.app.Dialog(this, R.style.Theme_Watlis);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -1990,20 +2255,20 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout bar = new LinearLayout(this);
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding(dp(20), dp(12), dp(20), dp(12));
-        TextView title = label(media.title, 18, TEXT);
+        TextView title = label(imageTitle, 18, TEXT);
         title.setMaxLines(2);
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         bar.addView(title, lp(0, -2, 1));
         TextView close = action("×", v -> dialog.dismiss());
         close.setTextSize(24);
-        close.setContentDescription("Close cover preview");
+        close.setContentDescription(character ? "Close character image preview" : "Close cover preview");
         bar.addView(close, lp(dp(48), dp(48)));
         margin(close, 12, 0, 0, 0);
         root.addView(bar);
         CoverPreviewView image = new CoverPreviewView(this);
-        image.setContentDescription("Full cover image");
+        image.setContentDescription(character ? "Full character image" : "Full cover image");
         root.addView(image, lp(-1, 0, 1));
-        TextView status = muted("Loading cover…");
+        TextView status = muted(character ? "Loading character image…" : "Loading cover…");
         status.setGravity(Gravity.CENTER);
         status.setPadding(dp(20), dp(8), dp(20), dp(8));
         add(root, status, 0, 0);
@@ -2031,11 +2296,11 @@ public class MainActivity extends AppCompatActivity {
         int edge = Math.min(2560, Math.max(getResources().getDisplayMetrics().widthPixels, getResources().getDisplayMetrics().heightPixels) * 2);
         coil.request.Disposable[] loading = new coil.request.Disposable[2];
         boolean[] closed = {false};
-        coil.request.ImageRequest request = new coil.request.ImageRequest.Builder(this).data(media.coverImage)
+        coil.request.ImageRequest request = new coil.request.ImageRequest.Builder(this).data(source)
                 .size(edge, edge).scale(coil.size.Scale.FIT).memoryCachePolicy(coil.request.CachePolicy.DISABLED).target(new coil.target.Target() {
                     @Override
                     public void onStart(android.graphics.drawable.Drawable placeholder) {
-                        status.setText("Loading cover…");
+                        status.setText(character ? "Loading character image…" : "Loading cover…");
                     }
 
                     @Override
@@ -2048,7 +2313,7 @@ public class MainActivity extends AppCompatActivity {
 
                     @Override
                     public void onError(android.graphics.drawable.Drawable error) {
-                        CoverStore.get(MainActivity.this).ensure(media.coverImage, file -> {
+                        CoverStore.get(MainActivity.this).ensure(source, file -> {
                             if (closed[0] || isDestroyed()) return;
                             if (file == null) {
                                 status.setText("Image unavailable. No saved thumbnail yet.");
@@ -2062,10 +2327,10 @@ public class MainActivity extends AppCompatActivity {
                                                     if (closed[0]) return;
                                                     image.setImageDrawable(saved);
                                                     fit.setEnabled(true); zoom.setEnabled(true);
-                                                    status.setText("Original unavailable · Saved cover preview");
+                                                    status.setText(character ? "Original unavailable · Saved character preview" : "Original unavailable · Saved cover preview");
                                                 }
                                                 @Override public void onError(android.graphics.drawable.Drawable missing) {
-                                                    status.setText("Saved cover unavailable. Choose another image.");
+                                                    status.setText("Saved image unavailable. Choose another image.");
                                                 }
                                             }).build());
                         });
@@ -2189,7 +2454,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void editStory(long id, String label, String value, int field) {
-        editTextDialog(label, value, true, text -> {
+        editTextDialog(label, value, true, (text, saved, failed) -> {
             StoryMemoryEntity old = viewModel.repository.story(id), story = new StoryMemoryEntity();
             story.mediaId = id;
             if (old != null) {
@@ -2211,15 +2476,61 @@ public class MainActivity extends AppCompatActivity {
                 default:
                     story.importantNotes = text;
             }
-            write(() -> viewModel.repository.saveStory(story), () -> showDetail(id));
+            write(() -> viewModel.repository.saveStory(story), () -> { saved.run(); showDetail(id); }, failed);
         });
     }
 
-    private void editTextDialog(String title, String value, boolean multiline, java.util.function.Consumer<String> save) {
+    private interface NoteSave {
+        void save(String value, Runnable saved, Runnable failed);
+    }
+
+    private void editTextDialog(String title, String value, boolean multiline, NoteSave save) {
         LinearLayout form = dialogForm();
         TextInputEditText input = field(form, title, value, multiline);
-        new MaterialAlertDialogBuilder(this).setTitle(title).setView(scroll(form)).setNegativeButton("Cancel", null)
-                .setPositiveButton("Save", (d, w) -> save.accept(text(input))).show();
+        androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(this).setTitle(title).setView(scroll(form))
+                .setNegativeButton("Cancel", null).setPositiveButton("Save", null).create();
+        boolean[] saving = {false};
+        Runnable persist = () -> {
+            if (saving[0]) return;
+            saving[0] = true;
+            dialog.getButton(-1).setEnabled(false);
+            save.save(text(input), dialog::dismiss, () -> { saving[0] = false; dialog.getButton(-1).setEnabled(true); });
+        };
+        protectNoteDraft(dialog, java.util.Collections.singletonList(input), persist, () -> saving[0]);
+        dialog.show();
+    }
+
+    /** Cancel, system Back and an outside tap all use the same draft decision. */
+    private void protectNoteDraft(androidx.appcompat.app.AlertDialog editor, List<TextInputEditText> fields,
+                                  Runnable save, java.util.function.BooleanSupplier saving) {
+        List<String> baseline = new ArrayList<>();
+        for (TextInputEditText field : fields) baseline.add(field.getText() == null ? "" : field.getText().toString());
+        androidx.appcompat.app.AlertDialog[] prompt = {null};
+        Runnable leave = () -> {
+            if (saving.getAsBoolean()) { if (!editor.isShowing()) editor.show(); return; }
+            boolean changed = false;
+            for (int i = 0; i < fields.size(); i++) {
+                String current = fields.get(i).getText() == null ? "" : fields.get(i).getText().toString();
+                if (!current.equals(baseline.get(i))) { changed = true; break; }
+            }
+            if (!changed) { editor.dismiss(); return; }
+            // Outside-tap cancellation has already hidden the window; retain the draft beneath the prompt.
+            if (!editor.isShowing()) editor.show();
+            if (prompt[0] != null && prompt[0].isShowing()) return;
+            prompt[0] = new MaterialAlertDialogBuilder(this).setTitle("Keep your changes?")
+                    .setMessage("Keep saves what you wrote. Discard removes these unsaved changes; previously saved notes stay unchanged.")
+                    .setNegativeButton("Discard", (d, which) -> editor.dismiss())
+                    .setPositiveButton("Keep", (d, which) -> save.run()).create();
+            prompt[0].show();
+        };
+        editor.setOnShowListener(d -> {
+            editor.getButton(-1).setOnClickListener(v -> save.run());
+            editor.getButton(-2).setOnClickListener(v -> leave.run());
+        });
+        editor.getOnBackPressedDispatcher().addCallback(new androidx.activity.OnBackPressedCallback(true) {
+            @Override public void handleOnBackPressed() { leave.run(); }
+        });
+        editor.setOnCancelListener(d -> leave.run());
     }
 
     private void editTracking(MediaEntity m, UserProgressEntity p) {
@@ -2351,12 +2662,14 @@ public class MainActivity extends AppCompatActivity {
             if (isDestroyed() || isFinishing()) return;
             if (m.coverImage != null && file == null)
                 toast("Cover could not be saved offline. Keep the original and try again when available.");
-            write(() -> viewModel.repository.saveMedia(m, p, genres), () -> {
+            ProgressHistoryEntity[] change = {null};
+            write(() -> viewModel.repository.saveMedia(m, p, genres, recorded -> change[0] = recorded), () -> {
                 editorSaving = false;
                 formBaseline = null;
                 formDraft = null;
                 detailOrigin = editorOrigin.equals("stats") ? "stats" : "home";
                 showDetail(m.id);
+                offerProgressUndo(change[0]);
             });
         });
     }

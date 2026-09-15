@@ -6,10 +6,12 @@ import androidx.room.Room;
 import androidx.room.RoomDatabase;
 
 @Database(entities = {MediaEntity.class, GenreEntity.class, MediaGenreCrossRef.class,
-        UserProgressEntity.class, StoryMemoryEntity.class, CharacterEntity.class, MediaTypeEntity.class}, version = 5, exportSchema = false)
+        UserProgressEntity.class, StoryMemoryEntity.class, CharacterEntity.class, MediaTypeEntity.class,
+        ProgressHistoryEntity.class}, version = 7, exportSchema = false)
 public abstract class WatlisDatabase extends RoomDatabase {
     public abstract MediaDao mediaDao();
     public abstract ProgressDao progressDao();
+    public abstract ProgressHistoryDao progressHistoryDao();
     public abstract GenreDao genreDao();
     public abstract StoryDao storyDao();
     public abstract MediaTypeDao mediaTypeDao();
@@ -18,11 +20,27 @@ public abstract class WatlisDatabase extends RoomDatabase {
     public static WatlisDatabase get(Context context) {
         if (INSTANCE == null) {
             synchronized (WatlisDatabase.class) {
-                if (INSTANCE == null) INSTANCE = Room.databaseBuilder(context.getApplicationContext(), WatlisDatabase.class, "watlis.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build();
+                if (INSTANCE == null) INSTANCE = Room.databaseBuilder(context.getApplicationContext(), WatlisDatabase.class, "watlis.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7).build();
             }
         }
         return INSTANCE;
     }
+
+    public static final androidx.room.migration.Migration MIGRATION_6_7 =
+            new androidx.room.migration.Migration(6, 7) {
+        @Override public void migrate(@androidx.annotation.NonNull androidx.sqlite.db.SupportSQLiteDatabase db) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS progress_history (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, mediaId INTEGER NOT NULL, token TEXT NOT NULL, fromProgress REAL NOT NULL, toProgress REAL NOT NULL, recordedAt INTEGER NOT NULL, beforeUpdatedAt INTEGER NOT NULL, afterUpdatedAt INTEGER NOT NULL, kind TEXT NOT NULL, unit TEXT NOT NULL, undoOf TEXT, FOREIGN KEY(mediaId) REFERENCES media(id) ON DELETE CASCADE)");
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_progress_history_mediaId_id ON progress_history(mediaId,id)");
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_progress_history_token ON progress_history(token)");
+        }
+    };
+
+    public static final androidx.room.migration.Migration MIGRATION_5_6 =
+            new androidx.room.migration.Migration(5, 6) {
+        @Override public void migrate(@androidx.annotation.NonNull androidx.sqlite.db.SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE characters ADD COLUMN image TEXT");
+        }
+    };
 
     public static final androidx.room.migration.Migration MIGRATION_4_5 =
             new androidx.room.migration.Migration(4, 5) {
