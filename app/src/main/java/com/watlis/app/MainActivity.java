@@ -56,6 +56,13 @@ public class MainActivity extends AppCompatActivity {
     private float editorCoverZoom = 1f;
     private boolean editorSaving;
     private ProgressUndoBar progressUndoBar;
+    private ShinigamiImporter chapterImporter;
+    private java.util.concurrent.Future<?> chapterImportTask;
+    java.util.function.Supplier<ShinigamiImporter> chapterImporterFactory = ShinigamiImporter::new;
+    private TextView editorImportStatus;
+    private TextInputLayout editorTitleBox;
+    private String importedTypeName;
+    private final Set<String> importedGenreNames = new java.util.LinkedHashSet<>();
     private TextView editorSaveButton;
     private TextView editorPositionSummary;
     private long selectedGenreFilter = -1;
@@ -630,6 +637,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private String typeName(String key) {
+        if ("imported_type".equals(key) && importedTypeName != null) return importedTypeName;
         MediaTypeEntity type = viewModel.repository.mediaType(key);
         return type == null ? cap(key) : type.name;
     }
@@ -800,6 +808,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showEditor(Long editId) {
+        cancelChapterImport();
         if (!screen.equals("editor")) {
             editorOrigin = screen;
             if (homeScroll != null && screen.equals("home")) homeScrollY = homeScroll.getScrollY();
@@ -810,14 +819,41 @@ public class MainActivity extends AppCompatActivity {
         UserProgressEntity p = m == null ? new UserProgressEntity() : viewModel.repository.progress(m.id);
         android.os.Bundle draft = formDraft;
         formDraft = null;
+        importedTypeName = draft == null ? null : draft.getString("importedType");
+        importedGenreNames.clear();
+        if (draft != null && draft.getStringArrayList("importedGenres") != null)
+            importedGenreNames.addAll(draft.getStringArrayList("importedGenres"));
         LinearLayout root = shell(m == null ? "Add media" : "Edit media", "", true, false);
         editorForm = new LinearLayout(this);
         editorForm.setOrientation(LinearLayout.VERTICAL);
         editorForm.setPadding(dp(20), dp(12), dp(20), dp(24));
         content.addView(scroll(editorForm), lp(-1, 0, 1));
         editorTitle = field(editorForm, "Title", draft == null ? (m == null ? "" : m.title) : draft.getString("title"), false);
+        if (m == null) {
+            editorTitleBox = (TextInputLayout) editorTitle.getParent().getParent();
+            editorTitleBox.setEndIconMode(TextInputLayout.END_ICON_CUSTOM);
+            editorTitleBox.setEndIconDrawable(R.drawable.ic_import_link);
+            editorTitleBox.setEndIconContentDescription("Fill from Shinigami chapter link");
+            editorTitleBox.setEndIconOnClickListener(v -> importChapterLink());
+            editorTitleBox.setEndIconVisible(ShinigamiImporter.chapterId(text(editorTitle)) != null);
+            editorTitle.addTextChangedListener(new android.text.TextWatcher() {
+                public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+                public void onTextChanged(CharSequence s, int start, int before, int count) {
+                    editorTitleBox.setEndIconVisible(chapterImporter == null && ShinigamiImporter.chapterId(s.toString()) != null);
+                }
+                public void afterTextChanged(android.text.Editable s) { }
+            });
+            editorImportStatus = muted(draft == null ? "Paste a Shinigami chapter link to fill this form." :
+                    draft.getString("importMessage", "Paste a Shinigami chapter link to fill this form."));
+            editorImportStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+            if (editorImportStatus.getText().toString().equals(getString(R.string.chapter_import_loading)))
+                editorImportStatus.setText(R.string.chapter_import_interrupted);
+            add(editorForm, editorImportStatus, 0, 12);
+        }
         add(editorForm, muted("Media type"), 0, 4);
-        editorType = spinner(editorForm, typeKeys(), draft == null ? (m == null ? "manga" : m.type) : draft.getString("type"));
+        List<String> editorTypes = new ArrayList<>(Arrays.asList(typeKeys()));
+        if (importedTypeName != null) editorTypes.add("imported_type");
+        editorType = spinner(editorForm, editorTypes.toArray(new String[0]), draft == null ? (m == null ? "manga" : m.type) : draft.getString("type"));
         editorType.setContentDescription("Media type");
         add(editorForm, action("+ New media type", v -> showMediaTypeDialog(null)), 0, 12);
         add(editorForm, muted("Release status"), 0, 4);
@@ -885,6 +921,95 @@ public class MainActivity extends AppCompatActivity {
 
     private String text(TextInputEditText e) {
         return e.getText() == null ? "" : e.getText().toString().trim();
+    }
+
+    private void importChapterLink() {
+        if (chapterImporter != null || editorSaving || editingId != null) return;
+        String link = text(editorTitle);
+        if (ShinigamiImporter.chapterId(link) == null) return;
+        Bundle before = captureDraft();
+        String beforeKey = draftKey(before);
+        TextInputEditText target = editorTitle;
+        ShinigamiImporter importer = chapterImporterFactory.get();
+        chapterImporter = importer;
+        editorTitleBox.setEndIconVisible(false);
+        editorImportStatus.setText(R.string.chapter_import_loading);
+        chapterImportTask = viewModel.linkExecutor.submit(() -> {
+            try {
+                ShinigamiImporter.Result result = importer.fetch(link);
+                runOnUiThread(() -> {
+                    if (!activeChapterImport(importer, target)) return;
+                    chapterImporter = null; chapterImportTask = null;
+                    editorTitleBox.setEndIconVisible(ShinigamiImporter.chapterId(text(editorTitle)) != null);
+                    if (editorSaving || !beforeKey.equals(draftKey(captureDraft()))) {
+                        editorImportStatus.setText(R.string.chapter_import_changed);
+                        return;
+                    }
+                    applyChapterImport(result, before);
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (!activeChapterImport(importer, target)) return;
+                    chapterImporter = null; chapterImportTask = null;
+                    editorTitleBox.setEndIconVisible(ShinigamiImporter.chapterId(text(editorTitle)) != null);
+                    String reason = error instanceof java.net.SocketTimeoutException ? "The service timed out." :
+                            error instanceof java.net.UnknownHostException ? "Could not connect. Check your internet connection." :
+                            error.getMessage() == null ? "Could not fetch metadata." : error.getMessage();
+                    editorImportStatus.setText(getString(R.string.chapter_import_error, reason));
+                });
+            }
+        });
+    }
+
+    private boolean activeChapterImport(ShinigamiImporter importer, TextInputEditText target) {
+        return !isDestroyed() && !isFinishing() && screen.equals("editor") && editingId == null
+                && editorTitle == target && chapterImporter == importer;
+    }
+
+    private void applyChapterImport(ShinigamiImporter.Result result, Bundle draft) {
+        draft.putString("title", result.title);
+        draft.putString("progress", number(result.progress));
+        draft.putString("tracking", "reading");
+        if (!result.cover.isEmpty()) {
+            draft.putString("cover", result.cover);
+            draft.putFloat("coverX", .5f); draft.putFloat("coverY", .5f); draft.putFloat("coverZoom", 1f);
+        }
+        if (result.releaseStatus != null) draft.putString("release", result.releaseStatus);
+        if (!result.format.isEmpty()) {
+            String key = null;
+            for (MediaTypeEntity type : viewModel.repository.mediaTypes())
+                if (type.name.equalsIgnoreCase(result.format) || type.key.equalsIgnoreCase(result.format)) { key = type.key; break; }
+            draft.putString("type", key == null ? "imported_type" : key);
+            draft.putString("importedType", key == null ? result.format : null);
+        }
+        Set<Long> genres = new HashSet<>();
+        for (long id : draft.getLongArray("genres")) genres.add(id);
+        Set<String> missing = new java.util.LinkedHashSet<>(importedGenreNames);
+        for (String name : result.genres) {
+            GenreEntity genre = viewModel.repository.findGenre(name);
+            if (genre == null) missing.add(name); else genres.add(genre.id);
+        }
+        draft.putLongArray("genres", genres.stream().mapToLong(Long::longValue).toArray());
+        draft.putStringArrayList("importedGenres", new ArrayList<>(missing));
+        String notes = draft.getString("notes", "");
+        draft.putString("notes", notes.isEmpty() ? result.notes : notes + "\n\n" + result.notes);
+        String message = "Draft filled · Chapter " + number(result.progress) + ". Review and tap Add media to save.";
+        if (result.releaseStatus == null) message += " Check release status; the source uses numeric status codes.";
+        if (result.cover.isEmpty()) message += " No supported cover was returned.";
+        draft.putString("importMessage", message);
+        formDraft = draft;
+        showEditor(null);
+    }
+
+    private void cancelChapterImport() {
+        if (chapterImporter != null) chapterImporter.cancel();
+        if (chapterImportTask != null) chapterImportTask.cancel(true);
+        chapterImporter = null; chapterImportTask = null;
+    }
+
+    @Override protected void onDestroy() {
+        cancelChapterImport();
+        super.onDestroy();
     }
 
     private double parseDouble(String value, double fallback) {
@@ -1893,6 +2018,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void install(LinearLayout root) {
+        if (!screen.equals("editor")) cancelChapterImport();
         if (progressUndoBar != null) { progressUndoBar.dismiss(); progressUndoBar = null; }
         drawer = new androidx.drawerlayout.widget.DrawerLayout(this);
         drawer.setBackgroundColor(BG);
@@ -2572,6 +2698,10 @@ public class MainActivity extends AppCompatActivity {
                 if (selected) editorGenres.add(g.id);
                 else editorGenres.remove(g.id);
             });
+        for (String name : new ArrayList<>(importedGenreNames))
+            selectionChip(group, name + " (new)", true, selected -> {
+                if (selected) importedGenreNames.add(name); else importedGenreNames.remove(name);
+            });
         editorGenreContainer.addView(group);
     }
 
@@ -2590,6 +2720,9 @@ public class MainActivity extends AppCompatActivity {
         b.putString("tracking", editorTracking.getSelectedItem().toString());
         b.putString("notes", text(editorNotes));
         b.putBoolean("favorite", editorFavorite.isChecked());
+        b.putString("importedType", importedTypeName);
+        b.putStringArrayList("importedGenres", new ArrayList<>(importedGenreNames));
+        if (editingId == null && editorImportStatus != null) b.putString("importMessage", editorImportStatus.getText().toString());
         b.putLongArray("genres", editorGenres.stream().sorted().mapToLong(Long::longValue).toArray());
         return b;
     }
@@ -2600,6 +2733,7 @@ public class MainActivity extends AppCompatActivity {
             String value = b.getString(key, "");
             result.append(value.length()).append(':').append(value);
         }
+        result.append(b.getString("importedType", "")).append(b.getStringArrayList("importedGenres"));
         return result.append(b.getBoolean("favorite")).append(Arrays.toString(b.getLongArray("genres")))
                 .append(':').append(b.getFloat("coverX", 0.5f)).append(':').append(b.getFloat("coverY", 0.5f))
                 .append(':').append(b.getFloat("coverZoom", 1f)).toString();
@@ -2655,6 +2789,9 @@ public class MainActivity extends AppCompatActivity {
         p.trackingStatus = editorTracking.getSelectedItem().toString();
         p.notes = text(editorNotes);
         List<Long> genres = new ArrayList<>(editorGenres);
+        List<String> newGenres = new ArrayList<>(importedGenreNames);
+        String newType = importedTypeName;
+        cancelChapterImport();
         editorSaving = true;
         editorSaveButton.setEnabled(false);
         editorSaveButton.setText("Saving…");
@@ -2663,7 +2800,7 @@ public class MainActivity extends AppCompatActivity {
             if (m.coverImage != null && file == null)
                 toast("Cover could not be saved offline. Keep the original and try again when available.");
             ProgressHistoryEntity[] change = {null};
-            write(() -> viewModel.repository.saveMedia(m, p, genres, recorded -> change[0] = recorded), () -> {
+            write(() -> viewModel.repository.saveImportedMedia(m, p, genres, newGenres, newType, recorded -> change[0] = recorded), () -> {
                 editorSaving = false;
                 formBaseline = null;
                 formDraft = null;

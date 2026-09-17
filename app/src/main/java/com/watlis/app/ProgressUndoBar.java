@@ -57,9 +57,10 @@ final class ProgressUndoBar extends BaseTransientBottomBar<ProgressUndoBar> {
         row.addView(undo, actionParams);
         getView().setPadding(0, 0, 0, 0);
         GradientDrawable surface = new GradientDrawable();
-        surface.setColor(Color.parseColor("#1B211D"));
+        surface.setColor(Color.parseColor("#101311"));
         surface.setCornerRadius(dp(16));
-        surface.setStroke(dp(1), Color.parseColor("#303932"));
+        surface.setStroke(dp(1), Color.parseColor("#282D29"));
+        getView().setBackgroundTintList(null); // Do not let the theme's inverse snackbar tint override charcoal.
         getView().setBackground(surface);
         ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) getView().getLayoutParams();
         params.width = ViewGroup.LayoutParams.MATCH_PARENT;
@@ -75,7 +76,7 @@ final class ProgressUndoBar extends BaseTransientBottomBar<ProgressUndoBar> {
         title.setText(mediaTitle);
         undo.setTextColor(accent);
         GradientDrawable button = new GradientDrawable();
-        button.setColor((accent & 0x00ffffff) | 0x18000000);
+        button.setColor(Color.parseColor("#1B211D"));
         button.setCornerRadius(dp(10));
         undo.setBackground(new android.graphics.drawable.RippleDrawable(
                 android.content.res.ColorStateList.valueOf((accent & 0x00ffffff) | 0x33000000), button, null));

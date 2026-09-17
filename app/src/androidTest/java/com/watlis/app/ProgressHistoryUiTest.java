@@ -118,6 +118,8 @@ public class ProgressHistoryUiTest {
                 android.view.View labels=row.getChildAt(0), action=row.getChildAt(1);
                 assertTrue(Math.abs((labels.getTop()+labels.getBottom())-(action.getTop()+action.getBottom()))<=2);
                 android.view.View bar=(android.view.View)row.getParent();
+                assertNull("Theme must not tint the dark notification",bar.getBackgroundTintList());
+                assertEquals(android.graphics.Color.parseColor("#101311"),((android.graphics.drawable.GradientDrawable)bar.getBackground()).getColor().getDefaultColor());
                 android.view.ViewGroup.MarginLayoutParams margins=(android.view.ViewGroup.MarginLayoutParams)bar.getLayoutParams();
                 assertEquals(margins.leftMargin,margins.rightMargin);
                 assertTrue(action.getWidth()>=48*view.getResources().getDisplayMetrics().density);
@@ -131,13 +133,13 @@ public class ProgressHistoryUiTest {
             onView(withContentDescription("Progress updated. Swipe down to dismiss.")).check(doesNotExist());
             assertEquals(25.5,db().progressDao().get(m.id).currentProgress,0);
             scenario.recreate();waitText("+ Add");openRecentMenu(m.title);
-            await(() -> {try {onView(withText("Undo latest change")).check(matches(isEnabled()));return true;}catch(AssertionError error){return false;}});
+            awaitMenuUndoEnabled();
             saveScreenshot("recent-undo-preview.png");
             onView(withText("Undo latest change")).perform(click());
             await(() -> db().progressDao().get(m.id).currentProgress==24.5);
-            onView(withText("Statistics")).check(matches(isDisplayed()));
+            onView(org.hamcrest.Matchers.allOf(withText("Statistics"),org.hamcrest.Matchers.not(isClickable()))).check(matches(isDisplayed()));
             onView(withContentDescription("More actions for "+m.title)).perform(scrollTo(),click());
-            onView(withText("Undo latest change")).check(matches(org.hamcrest.Matchers.not(isEnabled())));
+            onView(withText("Undo latest change")).check(matches(isDescendantOfA(org.hamcrest.Matchers.allOf(isAssignableFrom(androidx.appcompat.view.menu.ListMenuItemView.class),org.hamcrest.Matchers.not(isEnabled())))));
             pressBack();
         } finally {db().mediaDao().delete(m);}
     }
@@ -150,6 +152,8 @@ public class ProgressHistoryUiTest {
             onView(withContentDescription("Increase progress")).perform(click());
             await(() -> db().progressDao().get(m.id).currentProgress==1);
             onView(withText("Undo")).perform(swipeDown());
+            // Wait for the dismiss animation, not the three-second timeout.
+            onView(isRoot()).perform(pause(400));
             onView(withContentDescription("Progress updated. Swipe down to dismiss.")).check(doesNotExist());
             assertEquals(1,db().progressDao().get(m.id).currentProgress,0);
             assertEquals(1,db().progressHistoryDao().forBackup(m.id).size());
@@ -165,10 +169,10 @@ public class ProgressHistoryUiTest {
         repo.saveMedia(m,new UserProgressEntity(),Collections.emptyList());
         try(ActivityScenario<MainActivity> scenario=ActivityScenario.launch(MainActivity.class)) {
             waitText("+ Add");openRecentMenu(m.title);
-            onView(withText("Undo latest change")).check(matches(org.hamcrest.Matchers.not(isEnabled())));pressBack();
+            onView(withText("Undo latest change")).check(matches(isDescendantOfA(org.hamcrest.Matchers.allOf(isAssignableFrom(androidx.appcompat.view.menu.ListMenuItemView.class),org.hamcrest.Matchers.not(isEnabled())))));pressBack();
             repo.incrementProgress(m.id,1);
             onView(withContentDescription("More actions for "+m.title)).perform(scrollTo(),click());
-            await(() -> {try {onView(withText("Undo latest change")).check(matches(isEnabled()));return true;}catch(AssertionError error){return false;}});
+            awaitMenuUndoEnabled();
             repo.incrementProgress(m.id,1);
             onView(withText("Undo latest change")).perform(click());
             onView(isRoot()).perform(pause(400));
@@ -181,6 +185,13 @@ public class ProgressHistoryUiTest {
         onView(withContentDescription("Open navigation drawer")).perform(click());
         onView(withText("Statistics")).perform(click());
         onView(withContentDescription("More actions for "+title)).perform(scrollTo(),click());
+    }
+
+    private void awaitMenuUndoEnabled() throws Exception {
+        await(() -> {try {
+            onView(withText("Undo latest change")).check(matches(isDescendantOfA(org.hamcrest.Matchers.allOf(isAssignableFrom(androidx.appcompat.view.menu.ListMenuItemView.class),isEnabled()))));
+            return true;
+        } catch(AssertionError error){return false;}});
     }
 
     private void saveScreenshot(String name) throws Exception {

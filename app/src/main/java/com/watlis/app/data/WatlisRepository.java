@@ -122,6 +122,13 @@ public class WatlisRepository {
 
     public long saveMedia(MediaEntity media, UserProgressEntity progress, List<Long> genreIds,
                           java.util.function.Consumer<ProgressHistoryEntity> recorded) {
+        return saveImportedMedia(media, progress, genreIds, java.util.Collections.emptyList(), null, recorded);
+    }
+
+    /** Missing imported taxonomy is created only on Save, in the same transaction as the media. */
+    public long saveImportedMedia(MediaEntity media, UserProgressEntity progress, List<Long> genreIds,
+                                  List<String> genreNames, String typeName,
+                                  java.util.function.Consumer<ProgressHistoryEntity> recorded) {
         ProgressHistoryEntity[] change = {null};
         validateProgress(progress.currentProgress);
         if (!Float.isFinite(media.coverZoom) || media.coverZoom < 1 || media.coverZoom > 3)
@@ -132,8 +139,19 @@ public class WatlisRepository {
         if (media.title.trim().isEmpty()) throw new IllegalArgumentException("Title is required");
         if (progress.rating != null && (progress.rating < 1 || progress.rating > 10))
             throw new IllegalArgumentException("Rating must be between 1 and 10");
-        db.runInTransaction(() -> {
+        long originalId = media.id;
+        String originalType = media.type;
+        try { db.runInTransaction(() -> {
             ensureMediaTypes();
+            if ("imported_type".equals(media.type) && typeName != null && !typeName.trim().isEmpty()) {
+                MediaTypeEntity type = db.mediaTypeDao().findByName(typeName.trim());
+                if (type == null) {
+                    type = new MediaTypeEntity(); type.name = typeName.trim();
+                    type.key = "custom_" + java.util.UUID.randomUUID();
+                    db.mediaTypeDao().insert(type);
+                }
+                media.type = type.key;
+            }
             if (db.mediaTypeDao().get(media.type) == null) throw new IllegalArgumentException("Choose an existing media type");
             UserProgressEntity previous = media.id == 0 ? null : db.progressDao().get(media.id);
             long now = System.currentTimeMillis();
@@ -151,7 +169,16 @@ public class WatlisRepository {
                 change[0] = recordProgress(previous, progress, "correction", null);
             db.genreDao().clearForMedia(media.id);
             for (Long genreId : genreIds) db.genreDao().addToMedia(new MediaGenreCrossRef(media.id, genreId));
-        });
+            for (String name : genreNames) {
+                if (name == null || name.trim().isEmpty()) throw new IllegalArgumentException("Genre name is required");
+                GenreEntity genre = db.genreDao().findByName(name.trim());
+                if (genre == null) {
+                    genre = new GenreEntity(); genre.name = name.trim(); genre.color = "#9CBFFF";
+                    genre.id = db.genreDao().insert(genre);
+                }
+                db.genreDao().addToMedia(new MediaGenreCrossRef(media.id, genre.id));
+            }
+        }); } catch (RuntimeException error) { media.id = originalId; media.type = originalType; throw error; }
         refresh();
         recorded.accept(change[0]);
         return media.id;
