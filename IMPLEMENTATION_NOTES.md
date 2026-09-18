@@ -6,7 +6,7 @@ The current `tsugi-design-handoff/` folder is empty. The written handoff was rec
 
 Implemented controls include search and clear, multi-select filters with draft/reset/apply behavior, removable filters, sorting in both directions, Home and Detail progress updates, cover picking and preview, media editing, focused story/rating/status/notes editors, character management, genre management, and statistics. Media drafts and list navigation state survive Activity recreation.
 
-Room access runs on the ViewModel executor. Quick progress writes use the current persisted value in a transaction, and metadata edits preserve progress recency. Schema version 7 retains the earlier migrations, adds normalized cover-position coordinates (v3), editable media types (v4), 1x–3x cover zoom (v5, default 1x for existing media), an optional character image (v6), and progress history (v7). Snapshot loading uses a fixed number of bulk queries instead of four queries per title. History is not loaded into the startup snapshot.
+Room access runs on the ViewModel executor. Quick progress writes use the current persisted value in a transaction, and metadata edits preserve progress recency. Schema version 8 retains the earlier migrations, adds normalized cover-position coordinates (v3), editable media types (v4), 1x–3x cover zoom (v5, default 1x for existing media), an optional character image (v6), progress history (v7), and additive sync metadata (v8). Snapshot loading uses a fixed number of bulk queries instead of four queries per title. History and sync metadata are not loaded into the startup snapshot.
 
 Media types are managed from the drawer or created inline in the media editor. Names are case-insensitively unique, with stable keys and a chapter/episode progress unit. Renames preserve associations; deleting an in-use type requires a replacement and preserves tracking, notes, covers, and genres. At least one type must remain. JSON backups include type definitions and cover positions and remain compatible with version-1 backups.
 
@@ -38,7 +38,15 @@ Settings > Import providers supports adding/editing/enabling/disabling/deleting 
 
 Other future feature proposals are documented in `FEATURE_BLUEPRINT.md`; only its Progress history + Undo feature is implemented.
 
-## Build
+## Bluetooth sync
+
+Settings now opens a dedicated Java Bluetooth sync screen. Users select an already-paired phone/tablet, wait on one side and connect on the other. Secure RFCOMM accepts only the selected bonded device; only the Nearby devices connection permission is requested. There is no discovery service, location permission, internet upload or startup Bluetooth work.
+
+`SyncDocument` handles portable record identities, vector revisions, explicit deletion/conflict decisions and independently entered duplicate-title review. Media versions include progress and their matching history as one unit. `SyncEngine` normalizes local numeric IDs and image URIs, keeps local originals, preserves backup identities, scopes stored history tokens to their stable title identity, checks for edits made during review and commits collection plus metadata together. Deletion markers survive repeat syncs; automatic highest-chapter/last-wall-clock-wins logic is deliberately not used.
+
+`SyncWire` bounds compressed/checksummed frames; `BluetoothSyncSession` runs the two-way snapshot/review/approval/commit handshake. Both sides approve before applying. A disconnect between the two local commits is recoverable by resyncing. A validated pre-sync JSON recovery point is saved privately before commit and can be exported from the screen. Import-provider settings and full-size external photo files are not synced. See [BLUETOOTH_SYNC.md](BLUETOOTH_SYNC.md) for readable usage, conflict choices, size limits and physical-device checks.
+
+## Build and verification
 
 On this workstation, Android Studio includes the required JDK:
 
@@ -52,7 +60,16 @@ $adb = 'C:/Users/andel/AppData/Local/Android/Sdk/platform-tools/adb.exe'
 & $adb shell am instrument -w com.watlis.app.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-Verified on September 17, 2026 for dark Undo feedback and Shinigami link import:
+Verified on September 19, 2026 for Bluetooth sync:
+
+- Debug APK, Android-test APK, local unit tests and lint passed. Lint reports zero errors and 43 warnings in existing project/dependency areas. No new runtime dependencies or collection seeds were added.
+- Final instrumentation run: `OK (72 tests)` in 148.118 seconds on Pixel 7 / Android 15. This includes 70 executed passes and two opt-in live Shinigami checks skipped; no live API behavior is claimed for this run.
+- Sixteen new isolated database/protocol tests cover independent numeric IDs, repeated sync, decimal corrections, conflicting progress/notes, Undo after transfer, explicit duplicate merging/keep-both, legacy-copy history-token isolation, deletion propagation across three replicas, delete-versus-edit, stale-review rejection, rollback for invalid history, backup restoration, interrupted-commit retry, taxonomy conflicts, portable thumbnails with local-original retention, database reopening, metadata write failures, recovery-file retention, frame corruption/truncation/unsafe lengths, and both sides approving the duplex protocol.
+- Three new UI tests cover Settings entry/return, scrolling to the last action, rotation, conflict selection, approval cancellation and interruption during review. All three also passed at 320dp width / font scale 1.3. Inspected normal and enlarged-text screenshots; restored the emulator to 1080x2400 / font scale 1.0 afterward.
+- An initial UI check caught inset clipping of the final action; insets now wrap the scroll viewport. Review futures now complete after dialog dismissal, and dialog assertions explicitly target dialog windows. One earlier full-run attempt terminated in the emulator's native ART garbage collector; the final complete rerun above passed.
+- Installed APKs in place without clearing collection data. Sync tests use isolated databases/fixtures. No physical Bluetooth radio pair, large-library RAM benchmark, or new startup timing benchmark was available. Actual phone/tablet interoperability remains a required manual check before relying on sync for the only copy of a collection.
+
+Earlier verification on September 17, 2026 for dark Undo feedback and Shinigami link import:
 
 - Debug APK, Android-test APK, local unit tests and lint passed. Lint reports zero errors and 42 pre-existing warnings. All 46 instrumentation tests passed on Pixel 7 / Android 15 with live Shinigami checks enabled (`-e liveShinigami true`). Ordinary offline suite runs skip the two explicitly opt-in live tests.
 - Nine targeted tests also passed at 320dp width with font scale 1.3, including the live API/form checks and bounded offline cover-cache verification. Inspected the popup and imported form at both sizes; restored the emulator's original display and font settings afterward.

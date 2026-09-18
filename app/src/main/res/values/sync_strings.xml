@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sync_permission_denied">Nearby devices permission was denied. Your collection is unchanged. You can allow it in Android app settings.</string>
+    <string name="sync_settings_unavailable">Bluetooth settings are not available on this device.</string>
+    <string name="sync_export_busy">Finish or cancel sync before exporting a recovery backup.</string>
+    <string name="sync_no_recovery">No recovery backup yet. One is saved before sync changes your collection.</string>
+    <string name="sync_unsupported">This device does not support Bluetooth Classic. You can still use Export / Import data.</string>
+    <string name="sync_enable">Turn on Bluetooth to sync.</string>
+    <string name="sync_permission_changed">Bluetooth permission changed. Tap Show paired devices to try again.</string>
+</resources>

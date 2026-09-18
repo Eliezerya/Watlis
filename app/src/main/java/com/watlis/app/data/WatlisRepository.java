@@ -10,6 +10,7 @@ public class WatlisRepository {
     private final WatlisDatabase db;
     private final com.watlis.app.CoverStore coverStore;
     private volatile Snapshot snapshot = new Snapshot();
+    SyncEngine syncEngine;
 
     private static class Snapshot {
         List<MediaEntity> media = new ArrayList<>();
@@ -331,11 +332,26 @@ public class WatlisRepository {
     public String exportToJson() {
         return db.runInTransaction(() -> {
             refresh();
-            return exportSnapshotToJson();
+            org.json.JSONObject root = new org.json.JSONObject(exportSnapshotToJson());
+            if (syncEngine != null) syncEngine.decorateBackup(root);
+            return root.toString(2);
         });
     }
 
+    org.json.JSONObject exportForSync() throws org.json.JSONException {
+        return exportForSync(true);
+    }
+
+    org.json.JSONObject exportForSync(boolean bounded) throws org.json.JSONException {
+        refresh();
+        return new org.json.JSONObject(exportSnapshotToJson(bounded ? 16 * 1024 * 1024 : Long.MAX_VALUE));
+    }
+
     private String exportSnapshotToJson() {
+        return exportSnapshotToJson(Long.MAX_VALUE);
+    }
+
+    private String exportSnapshotToJson(long maxBytes) {
         try {
             org.json.JSONObject root = new org.json.JSONObject();
             root.put("version", 5);
@@ -355,6 +371,7 @@ public class WatlisRepository {
             }
             root.put("genres", genresArr);
             org.json.JSONArray mediaArr = new org.json.JSONArray();
+            long bytes = root.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
             for (MediaEntity m : snapshot.media) {
                 org.json.JSONObject o = new org.json.JSONObject();
                 o.put("id", m.id); o.put("title", m.title); o.put("type", m.type);
@@ -407,16 +424,22 @@ public class WatlisRepository {
                     history.put(entry);
                 }
                 o.put("progressHistory", history);
+                bytes += o.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+                if (bytes > maxBytes) throw new IllegalArgumentException("This collection exceeds the 16 MB Bluetooth sync limit. Use Export / Import data instead.");
                 mediaArr.put(o);
             }
             root.put("media", mediaArr);
-            return root.toString(2);
+            return maxBytes == Long.MAX_VALUE ? root.toString(2) : root.toString();
         } catch (org.json.JSONException e) {
             throw new RuntimeException("Failed to serialize data", e);
         }
     }
 
     public void importFromJson(String json) {
+        importFromJson(json, true);
+    }
+
+    void importFromJson(String json, boolean restoreSync) {
         org.json.JSONObject root;
         try { root = new org.json.JSONObject(json); }
         catch (org.json.JSONException e) { throw new IllegalArgumentException("Invalid backup file. Select a Watlis export file."); }
@@ -539,6 +562,7 @@ public class WatlisRepository {
                             throw new IllegalArgumentException("Progress does not match backup history");
                     }
                 }
+                if (restoreSync && syncEngine != null) syncEngine.restoredBackup(root);
             } catch (org.json.JSONException e) {
                 throw new IllegalArgumentException("Invalid backup data: " + e.getMessage());
             }

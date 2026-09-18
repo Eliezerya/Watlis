@@ -16,6 +16,7 @@ public class WatlisViewModel extends AndroidViewModel {
     public WatlisViewModel(@NonNull Application application) {
         super(application);
         repository = new WatlisRepository(WatlisDatabase.get(application), CoverStore.get(application));
+        new com.watlis.app.data.SyncEngine(WatlisDatabase.get(application), repository, application.getNoBackupFilesDir(), application.getFilesDir());
         importProviders = new ImportProviderStore(application);
     }
     @Override protected void onCleared() { executor.shutdown(); linkExecutor.shutdownNow(); super.onCleared(); }

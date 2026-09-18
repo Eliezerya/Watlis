@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase;
 
 @Database(entities = {MediaEntity.class, GenreEntity.class, MediaGenreCrossRef.class,
         UserProgressEntity.class, StoryMemoryEntity.class, CharacterEntity.class, MediaTypeEntity.class,
-        ProgressHistoryEntity.class}, version = 7, exportSchema = false)
+        ProgressHistoryEntity.class, SyncStateEntity.class}, version = 8, exportSchema = false)
 public abstract class WatlisDatabase extends RoomDatabase {
     public abstract MediaDao mediaDao();
     public abstract ProgressDao progressDao();
@@ -15,16 +15,24 @@ public abstract class WatlisDatabase extends RoomDatabase {
     public abstract GenreDao genreDao();
     public abstract StoryDao storyDao();
     public abstract MediaTypeDao mediaTypeDao();
+    public abstract SyncStateDao syncStateDao();
 
     private static volatile WatlisDatabase INSTANCE;
     public static WatlisDatabase get(Context context) {
         if (INSTANCE == null) {
             synchronized (WatlisDatabase.class) {
-                if (INSTANCE == null) INSTANCE = Room.databaseBuilder(context.getApplicationContext(), WatlisDatabase.class, "watlis.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7).build();
+                if (INSTANCE == null) INSTANCE = Room.databaseBuilder(context.getApplicationContext(), WatlisDatabase.class, "watlis.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8).build();
             }
         }
         return INSTANCE;
     }
+
+    public static final androidx.room.migration.Migration MIGRATION_7_8 =
+            new androidx.room.migration.Migration(7, 8) {
+        @Override public void migrate(@androidx.annotation.NonNull androidx.sqlite.db.SupportSQLiteDatabase db) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS sync_state (`key` TEXT NOT NULL PRIMARY KEY, localKey TEXT, hash TEXT NOT NULL, clock TEXT NOT NULL, label TEXT NOT NULL, deleted INTEGER NOT NULL)");
+        }
+    };
 
     public static final androidx.room.migration.Migration MIGRATION_6_7 =
             new androidx.room.migration.Migration(6, 7) {

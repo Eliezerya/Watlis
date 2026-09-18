@@ -30,7 +30,7 @@ public class MigrationInstrumentedTest {
             old.execSQL("INSERT INTO media_genres VALUES(1,2)");
             old.execSQL("INSERT INTO characters VALUES(1,1,'Existing character','Ally','Keep description')");
             old.setVersion(1);old.close();
-            room=Room.databaseBuilder(context,WatlisDatabase.class,name).addMigrations(WatlisDatabase.MIGRATION_1_2,WatlisDatabase.MIGRATION_2_3,WatlisDatabase.MIGRATION_3_4,WatlisDatabase.MIGRATION_4_5,WatlisDatabase.MIGRATION_5_6,WatlisDatabase.MIGRATION_6_7).build();
+            room=Room.databaseBuilder(context,WatlisDatabase.class,name).addMigrations(WatlisDatabase.MIGRATION_1_2,WatlisDatabase.MIGRATION_2_3,WatlisDatabase.MIGRATION_3_4,WatlisDatabase.MIGRATION_4_5,WatlisDatabase.MIGRATION_5_6,WatlisDatabase.MIGRATION_6_7,WatlisDatabase.MIGRATION_7_8).build();
             assertEquals("Existing title",room.mediaDao().getById(1).title);
             assertEquals(0.5f,room.mediaDao().getById(1).coverPositionX,0);
             assertEquals(0.5f,room.mediaDao().getById(1).coverPositionY,0);

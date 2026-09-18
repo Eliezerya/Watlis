@@ -50,6 +50,7 @@ public class MainActivity extends AppCompatActivity {
     private androidx.appcompat.app.AlertDialog characterDialog;
     private ActivityResultLauncher<String> exportPicker;
     private ActivityResultLauncher<String[]> importPicker;
+    private ActivityResultLauncher<android.content.Intent> bluetoothSync;
     private String selectedImageUri;
     private String pendingPickedCover;
     private float editorCoverX = 0.5f, editorCoverY = 0.5f;
@@ -97,6 +98,8 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES);
         viewModel = new ViewModelProvider(this).get(WatlisViewModel.class);
+        bluetoothSync = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result ->
+                write(viewModel.repository::refresh, () -> { clearFilters(); refreshScreen(); }));
         imagePicker = registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
             if (uri == null) return;
             try {
@@ -1601,6 +1604,9 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout root = shell("Settings", "", false, true);
         LinearLayout page = dialogForm();
         content.addView(scroll(page), lp(-1, 0, 1));
+        add(page, sectionTitle("Your devices"), 0, 8);
+        add(page, muted("Sync your phone and tablet locally. Review conflicts and possible duplicate titles before changing either collection."), 0, 12);
+        add(page, action("Bluetooth sync", v -> bluetoothSync.launch(new android.content.Intent(this, BluetoothSyncActivity.class))), 0, 24);
         add(page, sectionTitle("Import providers"), 0, 8);
         add(page, muted("Manage website domains, API bases and chapter/manga endpoints. Compatible JSON APIs only. Imports run only when you tap the link icon in New Media."), 0, 16);
         if (viewModel.importProviders.error() != null)
