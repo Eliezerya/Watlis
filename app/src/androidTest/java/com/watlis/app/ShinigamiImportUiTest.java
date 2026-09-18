@@ -21,7 +21,7 @@ import static org.junit.Assert.*;
 
 @RunWith(AndroidJUnit4.class)
 public class ShinigamiImportUiTest {
-    private static final String IMPORT="Fill from Shinigami chapter link";
+    private static final String IMPORT="Fill from chapter link";
     private WatlisDatabase db(){return WatlisDatabase.get(InstrumentationRegistry.getInstrumentation().getTargetContext());}
     private void await(BooleanSupplier ready) throws Exception {
         long end=System.currentTimeMillis()+12000;

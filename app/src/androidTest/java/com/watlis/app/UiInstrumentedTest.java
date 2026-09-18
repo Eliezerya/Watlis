@@ -379,11 +379,13 @@ public class UiInstrumentedTest {
                 onView(withContentDescription("Search your titles")).perform(replaceText(prefix),closeSoftKeyboard());
                 onView(withText("3 titles")).check(matches(isDisplayed()));
                 onView(withText("Filter")).perform(click());
+                expandFilterSheet();
                 onView(withText("Manga")).perform(click());
                 onView(withText("Anime")).perform(click());
                 onView(withText("Cancel")).perform(scrollTo(),click());
                 onView(withText("3 titles")).check(matches(isDisplayed()));
                 onView(withText("Filter")).perform(click());
+                expandFilterSheet();
                 onView(withText("Manga")).perform(click());
                 onView(withText("Anime")).perform(click());
                 onView(withText("Reading / watching")).perform(click());
@@ -398,5 +400,17 @@ public class UiInstrumentedTest {
             for(MediaEntity m:fixtures)db().mediaDao().delete(m);
             db().genreDao().delete(first.id);db().genreDao().delete(second.id);
         }
+    }
+
+    private void expandFilterSheet() {
+        // ScrollTo only scrolls the inner ScrollView; it cannot expand a collapsed outer sheet.
+        onView(withId(com.google.android.material.R.id.design_bottom_sheet)).perform(new androidx.test.espresso.ViewAction() {
+            public org.hamcrest.Matcher<android.view.View> getConstraints(){return isAssignableFrom(android.view.View.class);}
+            public String getDescription(){return "Expand the filter sheet before scrolling its content";}
+            public void perform(androidx.test.espresso.UiController ui,android.view.View view){
+                com.google.android.material.bottomsheet.BottomSheetBehavior.from(view).setState(com.google.android.material.bottomsheet.BottomSheetBehavior.STATE_EXPANDED);
+                ui.loopMainThreadForAtLeast(400);
+            }
+        });
     }
 }

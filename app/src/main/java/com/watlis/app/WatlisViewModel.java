@@ -10,11 +10,13 @@ import java.util.concurrent.Executors;
 
 public class WatlisViewModel extends AndroidViewModel {
     public final WatlisRepository repository;
+    final ImportProviderStore importProviders;
     public final ExecutorService executor = Executors.newSingleThreadExecutor();
     public final ExecutorService linkExecutor = Executors.newSingleThreadExecutor();
     public WatlisViewModel(@NonNull Application application) {
         super(application);
         repository = new WatlisRepository(WatlisDatabase.get(application), CoverStore.get(application));
+        importProviders = new ImportProviderStore(application);
     }
     @Override protected void onCleared() { executor.shutdown(); linkExecutor.shutdownNow(); super.onCleared(); }
 }

@@ -1,0 +1,4 @@
+<resources>
+    <string name="provider_enabled">Provider enabled</string>
+    <string name="provider_uuid">Require UUID chapter and manga IDs</string>
+</resources>

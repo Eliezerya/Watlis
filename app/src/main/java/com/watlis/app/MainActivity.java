@@ -63,6 +63,8 @@ public class MainActivity extends AppCompatActivity {
     private TextInputLayout editorTitleBox;
     private String importedTypeName;
     private final Set<String> importedGenreNames = new java.util.LinkedHashSet<>();
+    private ProviderEditorDialog providerEditor;
+    private Bundle providerDraft;
     private TextView editorSaveButton;
     private TextView editorPositionSummary;
     private long selectedGenreFilter = -1;
@@ -170,6 +172,7 @@ public class MainActivity extends AppCompatActivity {
             formDraft = savedInstanceState.getBundle("draft");
             formBaseline = savedInstanceState.getString("baseline");
             characterDraft = savedInstanceState.getBundle("characterDraft");
+            providerDraft = savedInstanceState.getBundle("providerDraft");
         }
         getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
             @Override
@@ -184,7 +187,7 @@ public class MainActivity extends AppCompatActivity {
         android.widget.ProgressBar indicator = new android.widget.ProgressBar(this);
         content.addView(indicator, lp(-1, dp(48)));
         install(loading);
-        write(() -> viewModel.repository.refresh(), () -> {
+        write(() -> { viewModel.repository.refresh(); viewModel.importProviders.load(); }, () -> {
             switch (pendingRestoreScreen) {
                 case "detail":
                     showDetail(detailId);
@@ -200,6 +203,10 @@ public class MainActivity extends AppCompatActivity {
                     break;
                 case "stats":
                     showStats();
+                    break;
+                case "settings":
+                    showSettings();
+                    if (providerDraft != null) openProviderEditor(null, providerDraft);
                     break;
                 default:
                     showHome();
@@ -234,6 +241,7 @@ public class MainActivity extends AppCompatActivity {
         out.putString("baseline", formBaseline);
         captureCharacterDraft();
         if (characterDraft != null) out.putBundle("characterDraft", new Bundle(characterDraft));
+        if (providerEditor != null) out.putBundle("providerDraft", providerEditor.capture());
         super.onSaveInstanceState(out);
     }
 
@@ -376,6 +384,7 @@ public class MainActivity extends AppCompatActivity {
             drawer.closeDrawers();
             showMediaTypes();
         }), 0, 16);
+        add(menu, action("Settings", v -> { drawer.closeDrawers(); showSettings(); }), 0, 16);
         add(menu, action("Export data", v -> {
             drawer.closeDrawers();
             exportData();
@@ -385,7 +394,7 @@ public class MainActivity extends AppCompatActivity {
             importData();
         }), 0, 24);
         add(menu, action("Close", v -> drawer.closeDrawers()), 0, 0);
-        int selected = screen.equals("genres") ? 3 : screen.equals("stats") ? 4 : screen.equals("types") ? 5 : favoritesOnly ? 2 : 1;
+        int selected = screen.equals("genres") ? 3 : screen.equals("stats") ? 4 : screen.equals("types") ? 5 : screen.equals("settings") ? 6 : favoritesOnly ? 2 : 1;
         menu.getChildAt(selected).setBackground(outlined(SURFACE_HIGH, ACCENT, 10));
         return menu;
     }
@@ -833,18 +842,18 @@ public class MainActivity extends AppCompatActivity {
             editorTitleBox = (TextInputLayout) editorTitle.getParent().getParent();
             editorTitleBox.setEndIconMode(TextInputLayout.END_ICON_CUSTOM);
             editorTitleBox.setEndIconDrawable(R.drawable.ic_import_link);
-            editorTitleBox.setEndIconContentDescription("Fill from Shinigami chapter link");
+            editorTitleBox.setEndIconContentDescription("Fill from chapter link");
             editorTitleBox.setEndIconOnClickListener(v -> importChapterLink());
-            editorTitleBox.setEndIconVisible(ShinigamiImporter.chapterId(text(editorTitle)) != null);
+            editorTitleBox.setEndIconVisible(viewModel.importProviders.matching(text(editorTitle)) != null);
             editorTitle.addTextChangedListener(new android.text.TextWatcher() {
                 public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
                 public void onTextChanged(CharSequence s, int start, int before, int count) {
-                    editorTitleBox.setEndIconVisible(chapterImporter == null && ShinigamiImporter.chapterId(s.toString()) != null);
+                    editorTitleBox.setEndIconVisible(chapterImporter == null && viewModel.importProviders.matching(s.toString()) != null);
                 }
                 public void afterTextChanged(android.text.Editable s) { }
             });
-            editorImportStatus = muted(draft == null ? "Paste a Shinigami chapter link to fill this form." :
-                    draft.getString("importMessage", "Paste a Shinigami chapter link to fill this form."));
+            editorImportStatus = muted(draft == null ? "Paste a chapter link from an enabled provider. Manage domains in Settings → Import providers." :
+                    draft.getString("importMessage", "Paste a chapter link from an enabled provider. Manage domains in Settings → Import providers."));
             editorImportStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
             if (editorImportStatus.getText().toString().equals(getString(R.string.chapter_import_loading)))
                 editorImportStatus.setText(R.string.chapter_import_interrupted);
@@ -926,7 +935,8 @@ public class MainActivity extends AppCompatActivity {
     private void importChapterLink() {
         if (chapterImporter != null || editorSaving || editingId != null) return;
         String link = text(editorTitle);
-        if (ShinigamiImporter.chapterId(link) == null) return;
+        ImportProvider provider = viewModel.importProviders.matching(link);
+        if (provider == null) return;
         Bundle before = captureDraft();
         String beforeKey = draftKey(before);
         TextInputEditText target = editorTitle;
@@ -936,11 +946,11 @@ public class MainActivity extends AppCompatActivity {
         editorImportStatus.setText(R.string.chapter_import_loading);
         chapterImportTask = viewModel.linkExecutor.submit(() -> {
             try {
-                ShinigamiImporter.Result result = importer.fetch(link);
+                ShinigamiImporter.Result result = importer.fetch(link, provider);
                 runOnUiThread(() -> {
                     if (!activeChapterImport(importer, target)) return;
                     chapterImporter = null; chapterImportTask = null;
-                    editorTitleBox.setEndIconVisible(ShinigamiImporter.chapterId(text(editorTitle)) != null);
+                    editorTitleBox.setEndIconVisible(viewModel.importProviders.matching(text(editorTitle)) != null);
                     if (editorSaving || !beforeKey.equals(draftKey(captureDraft()))) {
                         editorImportStatus.setText(R.string.chapter_import_changed);
                         return;
@@ -951,7 +961,7 @@ public class MainActivity extends AppCompatActivity {
                 runOnUiThread(() -> {
                     if (!activeChapterImport(importer, target)) return;
                     chapterImporter = null; chapterImportTask = null;
-                    editorTitleBox.setEndIconVisible(ShinigamiImporter.chapterId(text(editorTitle)) != null);
+                    editorTitleBox.setEndIconVisible(viewModel.importProviders.matching(text(editorTitle)) != null);
                     String reason = error instanceof java.net.SocketTimeoutException ? "The service timed out." :
                             error instanceof java.net.UnknownHostException ? "Could not connect. Check your internet connection." :
                             error.getMessage() == null ? "Could not fetch metadata." : error.getMessage();
@@ -1586,6 +1596,61 @@ public class MainActivity extends AppCompatActivity {
         add(p, card, 0, 12);
     }
 
+    private void showSettings() {
+        screen = "settings";
+        LinearLayout root = shell("Settings", "", false, true);
+        LinearLayout page = dialogForm();
+        content.addView(scroll(page), lp(-1, 0, 1));
+        add(page, sectionTitle("Import providers"), 0, 8);
+        add(page, muted("Manage website domains, API bases and chapter/manga endpoints. Compatible JSON APIs only. Imports run only when you tap the link icon in New Media."), 0, 16);
+        if (viewModel.importProviders.error() != null)
+            add(page, label(viewModel.importProviders.error(), 14, DANGER), 0, 16);
+        add(page, accentAction("+ Add provider", v -> openProviderEditor(null, null)), 0, 16);
+        for (ImportProvider provider : viewModel.importProviders.all()) {
+            LinearLayout row = new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(14), dp(12), dp(12), dp(12)); row.setBackground(outlined(SURFACE, BORDER, 14));
+            LinearLayout info = new LinearLayout(this); info.setOrientation(LinearLayout.VERTICAL);
+            TextView name = label(provider.name, 17, TEXT); name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            add(info, name, 0, 6);
+            add(info, muted(provider.enabled ? "Enabled" : "Disabled"), 0, 6);
+            TextView hosts = muted(provider.hosts.replace('\n', ' ')); hosts.setMaxLines(3); hosts.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            add(info, hosts, 0, 6);
+            TextView base = muted(provider.apiBase); base.setMaxLines(2); base.setEllipsize(android.text.TextUtils.TruncateAt.END); add(info, base, 0, 0);
+            info.setMinimumHeight(dp(48)); info.setContentDescription("Edit provider " + provider.name);
+            info.setOnClickListener(v -> openProviderEditor(provider, null)); row.addView(info, lp(0, -2, 1));
+            TextView more = action("⋮", v -> {
+                PopupMenu menu = new PopupMenu(this, v);
+                menu.getMenu().add("Edit provider"); menu.getMenu().add(provider.enabled ? "Disable provider" : "Enable provider"); menu.getMenu().add("Delete provider");
+                menu.setOnMenuItemClickListener(item -> {
+                    String selected = item.getTitle().toString();
+                    if (selected.equals("Edit provider")) openProviderEditor(provider, null);
+                    else if (selected.equals("Delete provider")) new MaterialAlertDialogBuilder(this).setTitle("Delete " + provider.name + "?")
+                            .setMessage("Only this importer configuration is removed. Your saved media and covers stay unchanged.")
+                            .setNegativeButton("Cancel", null).setPositiveButton("Delete", (d,w) -> write(() -> viewModel.importProviders.delete(provider.id), this::showSettings)).show();
+                    else {
+                        ImportProvider updated = provider.copy(); updated.enabled = !updated.enabled;
+                        write(() -> viewModel.importProviders.save(updated), this::showSettings);
+                    }
+                    return true;
+                }); menu.show();
+            });
+            more.setContentDescription("Provider actions for " + provider.name); row.addView(more, lp(dp(48), dp(48))); margin(more, 12, 0, 0, 0);
+            add(page, row, 0, 12);
+        }
+        if (viewModel.importProviders.all().isEmpty()) add(page, muted("No providers configured. Add one to enable chapter-link imports."), 0, 12);
+        add(page, action("Restore default provider", v -> new MaterialAlertDialogBuilder(this).setTitle("Restore default provider?")
+                .setMessage("This replaces all importer configurations with the Shinigami default. It does not change your collection.")
+                .setNegativeButton("Cancel", null).setPositiveButton("Restore", (d,w) -> write(viewModel.importProviders::reset, this::showSettings)).show()), 8, 12);
+        add(page, muted("Provider settings stay on this device and survive app reopening. Collection JSON exports do not include these settings."), 0, 12);
+        install(root);
+    }
+
+    private void openProviderEditor(ImportProvider provider, Bundle draft) {
+        providerDraft = null;
+        providerEditor = new ProviderEditorDialog(this, viewModel.importProviders, viewModel.executor, this::showSettings, () -> providerEditor = null);
+        providerEditor.show(provider, draft);
+    }
+
     private void showMediaTypes() {
         screen = "types";
         LinearLayout root = shell("Media types", "", false, true);
@@ -2086,6 +2151,7 @@ public class MainActivity extends AppCompatActivity {
         else if (screen.equals("stats")) showStats();
         else if (screen.equals("genres")) showGenres();
         else if (screen.equals("types")) showMediaTypes();
+        else if (screen.equals("settings")) showSettings();
         else if (screen.equals("home")) loadHome();
     }
 
