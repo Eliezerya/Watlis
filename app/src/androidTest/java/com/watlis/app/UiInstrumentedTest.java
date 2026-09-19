@@ -59,6 +59,12 @@ public class UiInstrumentedTest {
             id[0]=find(title).id;
             onView(withContentDescription("Increase progress")).perform(scrollTo(),click(),click(),click());
             await(() -> db().progressDao().get(id[0]).currentProgress==15.5);
+            // The transient Undo bar can cover the lower scroll target. Wait for its normal
+            // dismissal before tapping the story editor; persistence alone does not imply UI idleness.
+            await(() -> {
+                try { onView(withText("Undo")).check(doesNotExist()); return true; }
+                catch (AssertionError visibleFeedback) { return false; }
+            });
             onView(withText("+ Add story reminder")).perform(scrollTo(),click());
             onView(withHint("Story reminder")).perform(replaceText("The journey reached the northern gate."),closeSoftKeyboard());
             onView(withText("Save")).perform(click());

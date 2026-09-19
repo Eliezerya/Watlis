@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="floating_launch">Floating chapter</string>
+    <string name="floating_controls">Floating chapter controls</string>
+    <string name="floating_decrease">Decrease floating progress</string>
+    <string name="floating_increase">Increase floating progress</string>
+    <string name="floating_loading">Loading</string>
+    <string name="floating_close">Close floating chapter</string>
+    <string name="floating_open">Open detail</string>
+    <string name="floating_open_description">Open details for %1$s. %2$s %3$s. Hold to close floating controls.</string>
+    <string name="floating_permission_title">Read with floating controls</string>
+    <string name="floating_permission_message">Allow Watlis to display over other apps. A small − / chapter / + control will stay above your reader. Tap the chapter to open Detail, drag to move, or hold the chapter to close. It runs only when you start it.</string>
+    <string name="floating_permission_settings">Open settings</string>
+    <string name="floating_permission_denied">Floating controls need “Display over other apps”. Your collection is unchanged.</string>
+    <string name="floating_settings_unavailable">Overlay settings are unavailable on this device.</string>
+    <string name="floating_channel">Floating reading controls</string>
+    <string name="floating_notification">%1$s %2$s · tap to open Detail</string>
+    <string name="floating_notification_help">Drag to move. Hold the chapter to close. Changes are saved with reading history.</string>
+    <string name="floating_started">Drag to move · Tap chapter for Detail · Hold chapter to close</string>
+    <string name="floating_missing">This title is no longer available. Floating controls closed.</string>
+    <string name="floating_failed">Could not show floating controls. Check overlay permission and try again.</string>
+    <string name="floating_save_failed">A chapter change could not be saved. The displayed value has been refreshed.</string>
+    <string name="floating_open_failed">Could not open Detail. Your progress is saved; open Watlis to continue.</string>
+    <string name="floating_finish_editing">Finish or leave your current editor, then tap the floating chapter again. Your draft has been kept.</string>
+</resources>

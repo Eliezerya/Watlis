@@ -92,12 +92,25 @@ public class MainActivity extends AppCompatActivity {
     private androidx.drawerlayout.widget.DrawerLayout drawer;
     private android.widget.FrameLayout drawerPanel;
     private String pendingRestoreScreen = "home";
+    private FloatingChapterLauncher floatingLauncher;
+    private boolean uiReady, floatingRefreshInFlight;
+    private long floatingSeen;
+    private final android.os.Handler floatingHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable floatingRefresh = this::refreshFloatingProgress;
+    private final android.content.BroadcastReceiver floatingReceiver = new android.content.BroadcastReceiver() {
+        @Override public void onReceive(android.content.Context context, android.content.Intent intent) {
+            floatingHandler.removeCallbacks(floatingRefresh); floatingHandler.postDelayed(floatingRefresh, 150);
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES);
         viewModel = new ViewModelProvider(this).get(WatlisViewModel.class);
+        floatingLauncher = new FloatingChapterLauncher(this, savedInstanceState);
+        floatingSeen = FloatingChapterService.changes.get();
+        registerReceiver(floatingReceiver, new android.content.IntentFilter(FloatingChapterService.CHANGED), RECEIVER_NOT_EXPORTED);
         bluetoothSync = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result ->
                 write(viewModel.repository::refresh, () -> { clearFilters(); refreshScreen(); }));
         imagePicker = registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
@@ -222,11 +235,14 @@ public class MainActivity extends AppCompatActivity {
                     showCharacterDialog(mediaId, existing);
                 else characterDraft = null;
             }
+            uiReady = true;
+            if (!openFloatingIntent()) refreshFloatingProgress();
         });
     }
 
     @Override
     protected void onSaveInstanceState(Bundle out) {
+        floatingLauncher.save(out);
         out.putString("screen", screen);
         out.putString("query", query);
         out.putString("sort", selectedSort);
@@ -740,10 +756,12 @@ public class MainActivity extends AppCompatActivity {
         }
         menu.getMenu().add(m.isFavorite ? "Unfavorite" : "Favorite");
         menu.getMenu().add("Edit media");
+        menu.getMenu().add(R.string.floating_launch);
         menu.getMenu().add("Delete media");
         menu.setOnMenuItemClickListener(item -> {
             String selected = item.getTitle().toString();
             if (selected.equals("Edit media")) showEditor(m.id);
+            else if (selected.equals(getString(R.string.floating_launch))) floatingLauncher.launch(m);
             else if (selected.equals("Delete media")) confirmDelete(m);
             else write(() -> viewModel.repository.favorite(m.id), this::refreshScreen);
             return true;
@@ -1022,7 +1040,55 @@ public class MainActivity extends AppCompatActivity {
 
     @Override protected void onDestroy() {
         cancelChapterImport();
+        floatingHandler.removeCallbacksAndMessages(null);
+        unregisterReceiver(floatingReceiver);
         super.onDestroy();
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        // Lifecycle reaches RESUMED after this callback; defer the visibility-guarded refresh.
+        if (uiReady && !openFloatingIntent()) floatingHandler.post(floatingRefresh);
+    }
+
+    @Override protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent); setIntent(intent);
+        if (uiReady) openFloatingIntent();
+    }
+
+    private boolean floatingEditorOpen() {
+        return screen.equals("editor") || characterDraft != null || providerEditor != null;
+    }
+
+    private boolean openFloatingIntent() {
+        android.content.Intent intent = getIntent();
+        if (intent == null || !FloatingChapterService.OPEN.equals(intent.getAction())) return false;
+        long target = intent.getLongExtra(FloatingChapterService.ID, -1);
+        long created = intent.getLongExtra(FloatingChapterService.CREATED, -1);
+        intent.setAction(null); intent.removeExtra(FloatingChapterService.ID); intent.removeExtra(FloatingChapterService.CREATED);
+        if (floatingEditorOpen()) { toast(getString(R.string.floating_finish_editing)); return true; }
+        final long revision = FloatingChapterService.changes.get();
+        write(viewModel.repository::refresh, () -> {
+            if (floatingEditorOpen()) { toast(getString(R.string.floating_finish_editing)); return; }
+            MediaEntity media = viewModel.repository.media(target);
+            if (media == null || media.createdAt != created) { toast(getString(R.string.floating_missing)); refreshScreen(); }
+            else { floatingSeen = revision; openDetail(target); }
+            stopService(new android.content.Intent(this, FloatingChapterService.class));
+        });
+        return true;
+    }
+
+    private void refreshFloatingProgress() {
+        if (!uiReady || floatingRefreshInFlight || isFinishing() || isDestroyed()
+                || !getLifecycle().getCurrentState().isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) return;
+        long revision = FloatingChapterService.changes.get();
+        if (revision == floatingSeen) return;
+        floatingRefreshInFlight = true;
+        write(viewModel.repository::refresh, () -> {
+            floatingRefreshInFlight = false; floatingSeen = revision;
+            if (!floatingEditorOpen()) refreshScreen();
+            refreshFloatingProgress();
+        }, () -> floatingRefreshInFlight = false);
     }
 
     private double parseDouble(String value, double fallback) {
@@ -1145,6 +1211,7 @@ public class MainActivity extends AppCompatActivity {
         progressHeading.addView(history, lp(-2, -2));
         add(page, progressHeading, 0, 8);
         add(page, progressControls(m, p), 0, 8);
+        add(page, action(getString(R.string.floating_launch), v -> floatingLauncher.launch(m)), 0, 12);
         LinearLayout tracking = new LinearLayout(this);
         tracking.addView(action(statusLabel(p.trackingStatus, m.type), v -> editTracking(m, p)), lp(0, -2, 1));
         tracking.addView(action(p.rating == null ? "Add rating" : "★ " + p.rating + "/10", v -> editRating(m, p)), lp(0, -2, 1));

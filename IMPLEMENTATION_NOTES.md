@@ -46,6 +46,12 @@ Settings now opens a dedicated Java Bluetooth sync screen. Users select an alrea
 
 `SyncWire` bounds compressed/checksummed frames; `BluetoothSyncSession` runs the two-way snapshot/review/approval/commit handshake. Both sides approve before applying. A disconnect between the two local commits is recoverable by resyncing. A validated pre-sync JSON recovery point is saved privately before commit and can be exported from the screen. Import-provider settings and full-size external photo files are not synced. See [BLUETOOTH_SYNC.md](BLUETOOTH_SYNC.md) for readable usage, conflict choices, size limits and physical-device checks.
 
+## Floating chapter controls
+
+Detail and the media three-dot menu now offer **Floating chapter**. After the user grants Android's overlay permission, Watlis minimizes only after a compact charcoal control is ready. It shows minus, chapter/episode with decimal progress, and plus; tap the center to return to Detail, drag to reposition, or hold the center to close. The foreground notification also offers Open/Close. Existing editor drafts are preserved when returning through the floating control.
+
+The Java-only service runs only for an explicitly started session. It uses indexed reads for the selected title and the existing transactional progress/history writer on a single worker. Rapid taps are serialized, decreases respect zero, failures refresh persisted progress, stale/replaced targets are rejected, and database invalidation refreshes the control without polling. Returning to the app refreshes the existing snapshot. No schema migration, image loading, new runtime dependency, startup service, wake lock or network work was added. Android can hide overlays on security-sensitive screens; manufacturer/device behavior still needs physical testing. See [FLOATING_CHAPTER.md](FLOATING_CHAPTER.md) for usage and platform requirements.
+
 ## Build and verification
 
 On this workstation, Android Studio includes the required JDK:
@@ -60,7 +66,16 @@ $adb = 'C:/Users/andel/AppData/Local/Android/Sdk/platform-tools/adb.exe'
 & $adb shell am instrument -w com.watlis.app.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-Verified on September 19, 2026 for Bluetooth sync:
+Verified on September 19, 2026 for floating chapter controls:
+
+- Debug APK, Android-test APK, local unit test and lint tasks passed. Lint reports zero errors and the same 43 existing warnings; no new runtime dependencies or schema migration.
+- Final full instrumentation run: `OK (82 tests)` in 169.321 seconds on Pixel 7 / Android 15: 80 executed passes and two opt-in live API checks skipped. Output: `app/build/floating-final-tests.txt`.
+- Six new isolated database tests cover decimals, reading/correction history, latest-only Undo, backup restoration, concurrent writers, zero bounds, episode units, rollback on history failure, deleted/replaced records and metadata-only updates.
+- Four new UI tests cover both launch points, granting/canceling overlay permission, actual taps above the Clock app, rapid updates, dragging without incrementing, middle-to-Detail, hold-to-close, reopening Watlis with refreshed progress, and deletion of the active title. All four also passed at 320dp width / font scale 1.3. Inspected screenshots; restored normal 1080x2400 / font scale 1.0 afterward.
+- Testing caught and fixed the service's display-context creation and deferred the activity refresh until its resumed lifecycle state. The older story-editor regression now waits for the normal Undo-bar dismissal before tapping a lower scroll target; it retains all persistence assertions.
+- Installed in place without clearing collection data. Tests remove only their own media fixtures and restore overlay settings. No physical-device overlay/battery/RAM benchmark is claimed; manufacturer restrictions remain a manual check.
+
+Earlier verification on September 19, 2026 for Bluetooth sync:
 
 - Debug APK, Android-test APK, local unit tests and lint passed. Lint reports zero errors and 43 warnings in existing project/dependency areas. No new runtime dependencies or collection seeds were added.
 - Final instrumentation run: `OK (72 tests)` in 148.118 seconds on Pixel 7 / Android 15. This includes 70 executed passes and two opt-in live Shinigami checks skipped; no live API behavior is claimed for this run.

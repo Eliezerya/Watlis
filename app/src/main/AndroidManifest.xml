@@ -4,6 +4,10 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
     <application
         android:allowBackup="true"
@@ -14,6 +18,10 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Watlis">
+        <service android:name=".FloatingChapterService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started floating chapter controls to update personal reading progress over another reader app. Runs only until the user closes the control or opens Detail." />
+        </service>
         <activity android:name=".BluetoothSyncActivity" android:exported="false" android:theme="@style/Theme.Watlis" />
         <activity
             android:name=".MainActivity"
